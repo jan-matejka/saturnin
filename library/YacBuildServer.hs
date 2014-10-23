@@ -4,12 +4,14 @@ module YacBuildServer
     )
 where
 
+import Prelude hiding (lookup)
 import Network.Socket
 import Text.Printf
 import Data.Default
 import Data.Ini
+import Data.Maybe
 import Data.Text (pack, unpack)
-import Data.HashMap.Strict (empty, fromList, HashMap, toList, filterWithKey)
+import Data.HashMap.Strict hiding (map)
 import System.IO.Error
 import System.FilePath.Posix
 import System.Process
@@ -134,11 +136,22 @@ handle cg conn = do
             "cd %s && git checkout %s" (wdir </> "repo") githead
 
         repo_cg <- readFile $ wdir </> "repo" </> ".ybs"
-        distribute cg gituri githead $ lines repo_cg
+        distribute cg gituri githead . fromList . fmap blesmrt $ lines repo_cg
+  where
+    -- FIXME: Hack to also get list of expected answers for os-release package
+    -- since there currently is not any other better way
+    blesmrt :: String -> (Machine, String)
+    blesmrt xs = (head $ words xs, unwords . tail $ words xs)
 
-distribute :: ConfigServer -> String -> String -> [Machine] -> IO ()
-distribute cg gituri githead ms = do
-    (mapM_ (distribute' gituri githead) . toList) . filterWithKey (\k _ -> elem k ms) $ machines cg
+distribute :: ConfigServer -> String -> String -> HashMap Machine String -> IO ()
+distribute cg gituri githead ms =
+    mapM_ (distribute' gituri githead) . toList . filterMachines ms $ machines cg
+
+
+filterMachines :: HashMap Machine String -> HashMap Machine Hostname -> HashMap Machine (Hostname, String)
+filterMachines ms xs =
+    mapWithKey (\k v1 -> (v1, fromJust $ lookup k ms)) $
+    filterWithKey (\k _ -> elem k $ keys ms) xs
 
 remoteCallCommand :: Hostname -> String -> IO ()
 remoteCallCommand h cmd = do
@@ -146,8 +159,8 @@ remoteCallCommand h cmd = do
     _ <- printf "[%s]: %s\n" h cmd
     callCommand c
 
-distribute' :: String -> String -> (Machine, Hostname) -> IO ()
-distribute' gu gh (m, h) = do
+distribute' :: String -> String -> (Machine, (Hostname, String)) -> IO ()
+distribute' gu gh (m, (h, s)) = do
     putStrLn $ printf "running acceptance testsuite at %s for %s" h m
 
     remoteCallCommand h "rm -rf /tmp/foo"
@@ -157,6 +170,8 @@ distribute' gu gh (m, h) = do
     remoteCallCommand h $ printf "cd /tmp/foo && git checkout %s" gh
 
     remoteCallCommand h "uname -a; hostname; cat /etc/os-release"
+
+    remoteCallCommand h $ printf "mkdir -p ~/.config/os-release; echo '%s' > ~/.config/os-release/acceptance.cf" s
 
     remoteCallCommand h "cd /tmp/foo && cabal sandbox init && cabal update && PATH=\"/root/.cabal/bin:$PATH\" cabal install --only-dependencies -j --enable-tests && cabal test"
 
