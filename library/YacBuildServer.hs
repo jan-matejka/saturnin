@@ -143,6 +143,8 @@ distribute cg gituri githead ms = do
 distribute' :: String -> String -> (Machine, Hostname) -> IO ()
 distribute' gu gh (m, h) = do
     putStrLn $ printf "running acceptance testsuite at %s for %s" h m
+    callCommand $ printf "ssh %s rm -rf /tmp/foo" h
+
     callCommand $ printf
         "ssh %s git clone %s /tmp/foo" h gu
 
