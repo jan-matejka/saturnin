@@ -126,6 +126,8 @@ handle cg conn = do
         gituri = head words'
         githead = words' !! 1
 
+    _ <- close conn
+
     withMkTempWorkDir (work_dir cg) "XXXXXXX." $ \wdir -> do
         git_clone wdir gituri
         callCommand $ printf
