@@ -140,19 +140,25 @@ distribute :: ConfigServer -> String -> String -> [Machine] -> IO ()
 distribute cg gituri githead ms = do
     (mapM_ (distribute' gituri githead) . toList) . filterWithKey (\k _ -> elem k ms) $ machines cg
 
+remoteCallCommand :: Hostname -> String -> IO ()
+remoteCallCommand h cmd = do
+    let c = printf "ssh %s '%s'" h cmd
+    _ <- printf "[%s]: %s\n" h cmd
+    callCommand c
+
 distribute' :: String -> String -> (Machine, Hostname) -> IO ()
 distribute' gu gh (m, h) = do
     putStrLn $ printf "running acceptance testsuite at %s for %s" h m
-    callCommand $ printf "ssh %s rm -rf /tmp/foo" h
 
-    callCommand $ printf
-        "ssh %s git clone %s /tmp/foo" h gu
+    remoteCallCommand h "rm -rf /tmp/foo"
 
-    callCommand $ printf
-        "ssh %s cd /tmp/foo && git checkout %s" h gh
+    remoteCallCommand h $ printf "git clone %s /tmp/foo" gu
 
-    callCommand $ printf
-        "ssh %s cd /tmp/foo && cabal test" h
+    remoteCallCommand h $ printf "cd /tmp/foo && git checkout %s" gh
+
+    remoteCallCommand h "uname -a; hostname; cat /etc/os-release"
+
+    remoteCallCommand h "cd /tmp/foo && cabal sandbox init && cabal update && PATH=\"/root/.cabal/bin:$PATH\" cabal install --only-dependencies -j --enable-tests && cabal test"
 
 type Hostname = String
 type Machine  = String
