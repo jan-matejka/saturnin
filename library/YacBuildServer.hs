@@ -86,7 +86,7 @@ loop :: ConfigServer -> Socket -> IO ()
 loop cg sock = do
     (conn, addr) <- accept sock
     putStrLn $ printf "connected: %s" (show addr)
-    handle cg conn
+    catchIOError (handle cg conn) (\_ -> return ())
     loop cg sock
 
 
