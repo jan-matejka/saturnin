@@ -4,6 +4,7 @@ module YacBuildServer.Ybs
     , YbsConfig (..)
     , OsUploadConfig (..)
     , decodeFile
+    , ParseException (..)
     )
 where
 

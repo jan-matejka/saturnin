@@ -6,7 +6,7 @@ where
 
 import Prelude hiding (lookup)
 import Control.Concurrent.Spawn
-import Control.Exception (catch, SomeException)
+import Control.Exception (try, catch, SomeException)
 import Network.Socket
 import Text.Printf
 import Data.Default
@@ -135,15 +135,21 @@ handle cg conn = do
         gituri = head words'
         githead = words' !! 1
 
-    _ <- close conn
-
     withMkTempWorkDir (work_dir cg) "XXXXXXX." $ \wdir -> do
         git_clone wdir gituri
         callCommand $ printf
             "cd %s && git checkout %s" (wdir </> "repo") githead
 
-        ybs_cg <- decodeFile $ wdir </> "repo" </> ".ybs.yml"
-        distribute cg gituri githead ybs_cg $ wdir </> "repo"
+        eex <- try . decodeFile $ wdir </> "repo" </> ".ybs.yml" :: IO (Either ParseException (Maybe YbsConfig))
+
+        case eex of
+            Left ex -> do
+                _ <- send conn "Can't parse your .ybs.yml\n"
+                print ex
+            Right ybs_cg -> distribute cg gituri githead ybs_cg $ wdir </> "repo"
+
+    _ <- close conn
+    return ()
 
 distribute
     :: ConfigServer
