@@ -6,6 +6,7 @@ where
 
 import Prelude hiding (lookup)
 import Control.Concurrent.Spawn
+import Control.Exception (catch, SomeException)
 import Network.Socket
 import Text.Printf
 import Data.Default
@@ -92,9 +93,11 @@ loop :: ConfigServer -> Socket -> IO ()
 loop cg sock = do
     (conn, addr) <- accept sock
     putStrLn $ printf "connected: %s" (show addr)
-    catchIOError (handle cg conn) (\_ -> return ())
+    catch (handle cg conn) ehandler
     loop cg sock
-
+  where
+    ehandler :: SomeException -> IO ()
+    ehandler ex = printf "Fatal error: %s\n" (show ex)
 
 worker_cmd :: Maybe FilePath -> String -> [String] -> IO ()
 worker_cmd wdir exe argv = do
