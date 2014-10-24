@@ -169,6 +169,8 @@ remoteCallCommand :: Hostname -> String -> IO (String, String)
 remoteCallCommand h cmd = do
     _ <- printf "[%s]: %s\n" h cmd
     (rc, out, err) <- readProcessWithExitCode "ssh" [h, cmd] ""
+    _ <- printf "[%s]: last stdout:\n%s\n" h out
+    _ <- printf "[%s]: last stderr:\n%s\n" h err
     case rc of
         ExitSuccess -> return (out, err)
         (ExitFailure {}) -> error $ printf "[%s]: %s: %s" h (show rc) (show cmd)
