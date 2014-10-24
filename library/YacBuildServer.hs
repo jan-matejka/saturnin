@@ -10,8 +10,9 @@ import Network.Socket
 import Text.Printf
 import Data.Default
 import Data.Ini
-import Data.Maybe
 import Data.Text (pack, unpack)
+import Data.List (dropWhileEnd)
+import Data.Char
 import Data.HashMap.Strict hiding (map)
 import System.IO.Error
 import System.FilePath.Posix
@@ -20,11 +21,13 @@ import System.Exit
 import System.IO.Temp
 import System.Directory
 
+import YacBuildServer.Ybs
+
 data ConfigServer = ConfigServer
     { listen_addr   :: Maybe String
     , listen_port   :: Maybe String
     , work_dir      :: Maybe FilePath
-    , machines      :: HashMap Machine Hostname
+    , machines      :: HashMap Os Hostname
     }
 
 instance Default ConfigServer where
@@ -43,7 +46,7 @@ rightOrErr :: Either String Ini -> Ini
 rightOrErr (Right x) = x
 rightOrErr (Left  x) = error x
 
-readMachinesConfig :: Maybe FilePath -> IO (HashMap Machine Hostname)
+readMachinesConfig :: Maybe FilePath -> IO (HashMap Os Hostname)
 readMachinesConfig Nothing = readMachinesConfig $ Just "/etc/ybs/machines"
 readMachinesConfig (Just fp) = do
     f <- readFile fp
@@ -136,45 +139,84 @@ handle cg conn = do
         callCommand $ printf
             "cd %s && git checkout %s" (wdir </> "repo") githead
 
-        repo_cg <- readFile $ wdir </> "repo" </> ".ybs"
-        distribute cg gituri githead . fromList . fmap blesmrt $ lines repo_cg
-  where
-    -- FIXME: Hack to also get list of expected answers for os-release package
-    -- since there currently is not any other better way
-    blesmrt :: String -> (Machine, String)
-    blesmrt xs = (head $ words xs, unwords . tail $ words xs)
+        ybs_cg <- decodeFile $ wdir </> "repo" </> ".ybs.yml"
+        distribute cg gituri githead ybs_cg $ wdir </> "repo"
 
-distribute :: ConfigServer -> String -> String -> HashMap Machine String -> IO ()
-distribute cg gituri githead ms =
-    parMapIO_ (distribute' gituri githead) . toList . filterMachines ms $ machines cg
+distribute
+    :: ConfigServer
+    -> String
+    -> String
+    -> Maybe YbsConfig
+    -> FilePath         -- path to repo
+    -> IO ()
+distribute _ _ _ Nothing _ = printf "Failed to parse .ybs.yml"
+distribute cg gituri githead (Just ybs_cg) repo =
+    parMapIO_ (distribute' gituri githead ybs_cg repo) . toList . filterMachines (os ybs_cg) $ machines cg
 
+filterMachines :: [Os] -> HashMap Os Hostname -> HashMap Os Hostname
+filterMachines ss xs = filterWithKey (\k _ -> elem k ss) xs
 
-filterMachines :: HashMap Machine String -> HashMap Machine Hostname -> HashMap Machine (Hostname, String)
-filterMachines ms xs =
-    mapWithKey (\k v1 -> (v1, fromJust $ lookup k ms)) $
-    filterWithKey (\k _ -> elem k $ keys ms) xs
-
-remoteCallCommand :: Hostname -> String -> IO ()
+remoteCallCommand :: Hostname -> String -> IO (String, String)
 remoteCallCommand h cmd = do
-    let c = printf "ssh %s '%s'" h cmd
     _ <- printf "[%s]: %s\n" h cmd
-    callCommand c
+    (rc, out, err) <- readProcessWithExitCode "ssh" [h, cmd] ""
+    case rc of
+        ExitSuccess -> return (out, err)
+        (ExitFailure {}) -> error $ printf "[%s]: %s: %s" h (show rc) (show cmd)
 
-distribute' :: String -> String -> (Machine, (Hostname, String)) -> IO ()
-distribute' gu gh (m, (h, s)) = do
-    putStrLn $ printf "running acceptance testsuite at %s for %s" h m
+distribute'
+    :: String           -- git uri
+    -> String           -- git head
+    -> YbsConfig
+    -> FilePath         -- repo
+    -> (Os, Hostname)
+    -> IO ()
+distribute' gu gh ybs_cg repo (s, h) = do
+    putStrLn $ printf "running acceptance testsuite at %s for %s" h s
 
-    remoteCallCommand h "rm -rf /tmp/foo"
+    rwdir <- distributeSetup gu gh ybs_cg repo s h
+    distributeRunTest h rwdir
+    return ()
 
-    remoteCallCommand h $ printf "git clone %s /tmp/foo" gu
+distributeRunTest
+    :: Hostname
+    -> FilePath
+    -> IO ()
+distributeRunTest h d = (remoteCallCommand h $ printf
+    "cd %s && cabal test" d) >> return ()
 
-    remoteCallCommand h $ printf "cd /tmp/foo && git checkout %s" gh
+distributeSetup
+    :: String           -- git uri
+    -> String           -- git head
+    -> YbsConfig
+    -> FilePath         -- repo
+    -> Os
+    -> Hostname
+    -> IO (FilePath)    -- remote workdir
+distributeSetup gu gh ybs_cg repo s h = do
+    (out, _) <- remoteCallCommand h "mktemp -dt 'ybs.XXXXXX'"
+    distributeOsUpload h repo s $ os_upload ybs_cg
 
-    remoteCallCommand h "uname -a; hostname; cat /etc/os-release"
+    let rwdir = dropWhileEnd isSpace out
 
-    remoteCallCommand h $ printf "mkdir -p ~/.config/os-release; echo '%s' > ~/.config/os-release/acceptance.cf" s
+    _ <- remoteCallCommand h $ printf "cd %s && git clone %s r && cd r && git checkout %s"
+        rwdir gu gh
 
-    remoteCallCommand h "cd /tmp/foo && cabal sandbox init && cabal update && PATH=\"/root/.cabal/bin:$PATH\" cabal install --only-dependencies -j --enable-tests && cabal test"
+    _ <- remoteCallCommand h $ printf "cd %s && cabal sandbox init && cabal update && PATH=\"/root/.cabal/bin:$PATH\" cabal install --only-dependencies -j --enable-tests"
+        (rwdir </> "r")
+
+    return $ rwdir </> "r"
+
+distributeOsUpload
+    :: Hostname
+    -> FilePath
+    -> Os
+    -> Maybe OsUploadConfig
+    -> IO ()
+distributeOsUpload _ _ _ Nothing = return ()
+distributeOsUpload host repo s (Just ou) =
+    callCommand $
+    printf "scp -r %s %s:%s"
+    (repo </> (source ou) </> s) host (target ou)
 
 type Hostname = String
-type Machine  = String
