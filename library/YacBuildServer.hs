@@ -5,6 +5,7 @@ module YacBuildServer
 where
 
 import Prelude hiding (lookup)
+import Control.Concurrent.Spawn
 import Network.Socket
 import Text.Printf
 import Data.Default
@@ -145,7 +146,7 @@ handle cg conn = do
 
 distribute :: ConfigServer -> String -> String -> HashMap Machine String -> IO ()
 distribute cg gituri githead ms =
-    mapM_ (distribute' gituri githead) . toList . filterMachines ms $ machines cg
+    parMapIO_ (distribute' gituri githead) . toList . filterMachines ms $ machines cg
 
 
 filterMachines :: HashMap Machine String -> HashMap Machine Hostname -> HashMap Machine (Hostname, String)
