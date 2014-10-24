@@ -160,7 +160,11 @@ distribute
     -> IO ()
 distribute _ _ _ Nothing _ = printf "Failed to parse .ybs.yml"
 distribute cg gituri githead (Just ybs_cg) repo =
-    parMapIO_ (distribute' gituri githead ybs_cg repo) . toList . filterMachines (os ybs_cg) $ machines cg
+    parMapIO_ (distributor gituri githead ybs_cg repo) . toList . filterMachines (os ybs_cg) $ machines cg
+  where
+    distributor a b c d e = catch (distribute' a b c d e) handler
+    handler :: SomeException -> IO ()
+    handler ex = print ex
 
 filterMachines :: [Os] -> HashMap Os Hostname -> HashMap Os Hostname
 filterMachines ss xs = filterWithKey (\k _ -> elem k ss) xs
