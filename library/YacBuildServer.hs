@@ -128,17 +128,21 @@ git_clone wdir uri = do
     printf "git clone %s into %s" uri wdir
     worker_cmd (Just wdir) "git" ["clone", uri, "repo"]
 
+data BuildRequest = GitBuildRequest
+    { brUri   :: String
+    , brHead  :: String
+    }
+
 handle :: ConfigServer -> Socket -> IO ()
 handle cg conn = do
     (bytes, _, _) <- recvFrom conn 1024
     let words' = words bytes
-        gituri = head words'
-        githead = words' !! 1
+        breq   = GitBuildRequest (head words') (words' !! 1)
 
     withMkTempWorkDir (work_dir cg) "XXXXXXX." $ \wdir -> do
-        git_clone wdir gituri
-        callCommand $ printf
-            "cd %s && git checkout %s" (wdir </> "repo") githead
+        git_clone wdir $ brUri breq
+        callCommand . printf
+            "cd %s && git checkout %s" (wdir </> "repo") $ brHead breq
 
         eex <- try . decodeFile $ wdir </> "repo" </> ".ybs.yml" :: IO (Either ParseException (Maybe YbsConfig))
 
@@ -146,23 +150,22 @@ handle cg conn = do
             Left ex -> do
                 _ <- send conn "Can't parse your .ybs.yml\n"
                 print ex
-            Right ybs_cg -> distribute cg gituri githead ybs_cg $ wdir </> "repo"
+            Right ybs_cg -> distribute cg breq ybs_cg $ wdir </> "repo"
 
     _ <- close conn
     return ()
 
 distribute
     :: ConfigServer
-    -> String
-    -> String
+    -> BuildRequest
     -> Maybe YbsConfig
     -> FilePath         -- path to repo
     -> IO ()
-distribute _ _ _ Nothing _ = printf "Failed to parse .ybs.yml"
-distribute cg gituri githead (Just ybs_cg) repo =
-    parMapIO_ (distributor gituri githead ybs_cg repo) . toList . filterMachines (os ybs_cg) $ machines cg
+distribute _ _ Nothing _ = printf "Failed to parse .ybs.yml"
+distribute cg breq (Just ybs_cg) repo =
+    parMapIO_ (distributor breq ybs_cg repo) . toList . filterMachines (os ybs_cg) $ machines cg
   where
-    distributor a b c d e = catch (distribute' a b c d e) handler
+    distributor a b c d = catch (distribute' a b c d) handler
     handler :: SomeException -> IO ()
     handler ex = print ex
 
@@ -180,16 +183,15 @@ remoteCallCommand h cmd = do
         (ExitFailure {}) -> error $ printf "[%s]: %s: %s" h (show rc) (show cmd)
 
 distribute'
-    :: String           -- git uri
-    -> String           -- git head
+    :: BuildRequest
     -> YbsConfig
     -> FilePath         -- repo
     -> (Os, Hostname)
     -> IO ()
-distribute' gu gh ybs_cg repo (s, h) = do
+distribute' breq ybs_cg repo (s, h) = do
     putStrLn $ printf "running acceptance testsuite at %s for %s" h s
 
-    rwdir <- distributeSetup gu gh ybs_cg repo s h
+    rwdir <- distributeSetup breq ybs_cg repo s h
     distributeRunTest h rwdir
     return ()
 
@@ -201,21 +203,20 @@ distributeRunTest h d = (remoteCallCommand h $ printf
     "cd %s && cabal test" d) >> return ()
 
 distributeSetup
-    :: String           -- git uri
-    -> String           -- git head
+    :: BuildRequest
     -> YbsConfig
     -> FilePath         -- repo
     -> Os
     -> Hostname
     -> IO (FilePath)    -- remote workdir
-distributeSetup gu gh ybs_cg repo s h = do
+distributeSetup breq ybs_cg repo s h = do
     (out, _) <- remoteCallCommand h "mktemp -dt 'ybs.XXXXXX'"
     distributeOsUpload h repo s $ os_upload ybs_cg
 
     let rwdir = dropWhileEnd isSpace out
 
     _ <- remoteCallCommand h $ printf "cd %s && git clone %s r && cd r && git checkout %s"
-        rwdir gu gh
+        rwdir (brUri breq) (brHead breq)
 
     _ <- remoteCallCommand h $ printf "cd %s && cabal sandbox init && cabal update && PATH=\"/root/.cabal/bin:$PATH\" cabal install --only-dependencies -j --enable-tests"
         (rwdir </> "r")
