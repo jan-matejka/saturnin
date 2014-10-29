@@ -179,7 +179,7 @@ data LoggingNamespace = LoggingNamespace
     }
 
 log :: LoggingNamespace -> String -> String -> IO ()
-log ln m msg = appendFile ((dir ln) </> m) msg
+log ln m msg = appendFile ((dir ln) </> (printf "%s.txt" m)) msg
 
 mkLoggingNamespace :: BuildRequest -> IO LoggingNamespace
 mkLoggingNamespace br = do
