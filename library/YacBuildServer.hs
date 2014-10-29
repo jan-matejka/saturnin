@@ -116,7 +116,7 @@ runCmd
     -> FilePath             -- exe
     -> [String]             -- argv
     -> (String -> IO ())    -- logger
-    -> IO ()
+    -> IO (String)          -- out
 runCmd cwd' exe argv lgr = do
     let cp = (proc exe argv)
             { cwd       = cwd'
@@ -132,10 +132,10 @@ runCmd cwd' exe argv lgr = do
     _ <- lgr $ printf "ec: %s\nstdout:\n%s\nstderr:\n%s\n"
             (show ec) (show out) (show err)
 
-    fx ec
+    fx ec out
   where
-    fx (f @ (ExitFailure _)) = error $ printf "%s: %s %s" (show f) (show exe) (show argv)
-    fx ExitSuccess = return ()
+    fx (f @ (ExitFailure _)) _ = error $ printf "%s: %s %s" (show f) (show exe) (show argv)
+    fx ExitSuccess out = return out
 
 withMkTempWorkDir ::
        Maybe FilePath
@@ -203,8 +203,9 @@ handle cg conn = do
         case eex of
             Left ex -> do
                 _ <- send conn "Can't parse your .ybs.yml\n"
-                print ex
-            Right ybs_cg -> distribute cg breq ybs_cg $ wdir </> "repo"
+                _ <- log lns "master" $ show ex
+                return ()
+            Right ybs_cg -> distribute cg breq ybs_cg (wdir </> "repo") (log lns)
 
     _ <- close conn
     return ()
@@ -214,46 +215,46 @@ distribute
     -> BuildRequest
     -> Maybe YbsConfig
     -> FilePath         -- path to repo
+    -> (FilePath -> String -> IO ())
     -> IO ()
-distribute _ _ Nothing _ = printf "Failed to parse .ybs.yml"
-distribute cg breq (Just ybs_cg) repo =
-    parMapIO_ (distributor breq ybs_cg repo) . toList . filterMachines (os ybs_cg) $ machines cg
+distribute _ _ Nothing _ lgr = lgr "master" "Failed to parse .ybs.yml"
+distribute cg breq (Just ybs_cg) repo lgr =
+    parMapIO_ (distributor breq ybs_cg repo lgr) . toList . filterMachines (os ybs_cg) $ machines cg
   where
-    distributor a b c d = catch (distribute' a b c d) handler
+    distributor a b c d e = catch (distribute' a b c d e) handler
     handler :: SomeException -> IO ()
     handler ex = print ex
 
 filterMachines :: [Os] -> HashMap Os Hostname -> HashMap Os Hostname
 filterMachines ss xs = filterWithKey (\k _ -> elem k ss) xs
 
-remoteCallCommand :: Hostname -> String -> IO (String, String)
-remoteCallCommand h cmd = do
-    _ <- printf "[%s]: %s\n" h cmd
-    (rc, out, err) <- readProcessWithExitCode "ssh" [h, cmd] ""
-    _ <- printf "[%s]: last stdout:\n%s\n" h out
-    _ <- printf "[%s]: last stderr:\n%s\n" h err
-    case rc of
-        ExitSuccess -> return (out, err)
-        (ExitFailure {}) -> error $ printf "[%s]: %s: %s" h (show rc) (show cmd)
+remoteCallCommand
+    :: Hostname
+    -> (String -> IO ())
+    -> String
+    -> IO (String)
+remoteCallCommand h lgr cmd = runCmd Nothing "ssh" [h, cmd] lgr
 
 distribute'
     :: BuildRequest
     -> YbsConfig
     -> FilePath         -- repo
+    -> (FilePath -> String -> IO ())
     -> (Os, Hostname)
     -> IO ()
-distribute' breq ybs_cg repo (s, h) = do
-    putStrLn $ printf "running acceptance testsuite at %s for %s" h s
+distribute' breq ybs_cg repo lgr (s, h) = do
+    lgr "master" $ printf "running acceptance testsuite at %s for %s" h s
 
-    rwdir <- distributeSetup breq ybs_cg repo s h
-    distributeRunTest h rwdir
+    rwdir <- distributeSetup breq ybs_cg repo s h (lgr (show s))
+    distributeRunTest h rwdir (lgr (show s))
     return ()
 
 distributeRunTest
     :: Hostname
     -> FilePath
+    -> (String -> IO ())
     -> IO ()
-distributeRunTest h d = (remoteCallCommand h $ printf
+distributeRunTest h d lgr = (remoteCallCommand h lgr $ printf
     "cd %s && cabal test" d) >> return ()
 
 distributeSetup
@@ -262,17 +263,18 @@ distributeSetup
     -> FilePath         -- repo
     -> Os
     -> Hostname
+    -> (String -> IO ())
     -> IO (FilePath)    -- remote workdir
-distributeSetup breq ybs_cg repo s h = do
-    (out, _) <- remoteCallCommand h "mktemp -dt 'ybs.XXXXXX'"
+distributeSetup breq ybs_cg repo s h lgr = do
+    out  <- remoteCallCommand h lgr "mktemp -dt 'ybs.XXXXXX'"
     distributeOsUpload h repo s $ os_upload ybs_cg
 
     let rwdir = dropWhileEnd isSpace out
 
-    _ <- remoteCallCommand h $ printf "cd %s && git clone %s r && cd r && git checkout %s"
+    _ <- remoteCallCommand h lgr $ printf "cd %s && git clone %s r && cd r && git checkout %s"
         rwdir (brUri breq) (brHead breq)
 
-    _ <- remoteCallCommand h $ printf "cd %s && cabal sandbox init && cabal update && PATH=\"/root/.cabal/bin:$PATH\" cabal install --only-dependencies -j --enable-tests"
+    _ <- remoteCallCommand h lgr $ printf "cd %s && cabal sandbox init && cabal update && PATH=\"/root/.cabal/bin:$PATH\" cabal install --only-dependencies -j --enable-tests"
         (rwdir </> "r")
 
     return $ rwdir </> "r"
