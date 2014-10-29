@@ -4,7 +4,7 @@ module YacBuildServer
     )
 where
 
-import Prelude hiding (lookup)
+import Prelude hiding (lookup, log)
 import Control.Concurrent.Spawn
 import Control.Exception (try, catch, SomeException)
 import Network.Socket
@@ -15,11 +15,15 @@ import Data.Text (pack, unpack)
 import Data.List (dropWhileEnd)
 import Data.Char
 import Data.HashMap.Strict hiding (map)
+import Data.Time.Clock
+import Data.Time.Format
 import System.IO.Error
 import System.FilePath.Posix
 import System.Process
 import System.Exit
+import System.Locale
 import System.IO.Temp
+import System.IO
 import System.Directory
 
 import YacBuildServer.Ybs
@@ -99,12 +103,36 @@ loop cg sock = do
     ehandler :: SomeException -> IO ()
     ehandler ex = printf "Fatal error: %s\n" (show ex)
 
-worker_cmd :: Maybe FilePath -> String -> [String] -> IO ()
-worker_cmd wdir exe argv = do
-    (_, _, _, ph) <- createProcess $ (proc exe argv) { cwd = wdir }
-    rc <- waitForProcess ph
-    fx rc
+showCP :: CreateProcess -> String
+showCP c = printf "CreateProcess { cmdspec = %s, cwd = %s, env = %s }"
+    (showCmdSpec $ cmdspec c) (show $ cwd c) (show $ env c)
 
+showCmdSpec :: CmdSpec -> String
+showCmdSpec (RawCommand exe argv) = printf "RawCommand %s %s" (show exe) (show argv)
+showCmdSpec (ShellCommand cmd) = printf "ShellCommand %s" (show cmd)
+
+runCmd
+    :: Maybe FilePath       -- cwd
+    -> FilePath             -- exe
+    -> [String]             -- argv
+    -> (String -> IO ())    -- logger
+    -> IO ()
+runCmd cwd' exe argv lgr = do
+    let cp = (proc exe argv)
+            { cwd       = cwd'
+            , std_out   = CreatePipe
+            , std_err   = CreatePipe
+            }
+    _ <- lgr $ printf "running: %s\n" (showCP cp)
+    (_, Just hout, Just herr, ph) <- createProcess cp
+    ec <- waitForProcess ph
+    out <- hGetContents hout
+    err <- hGetContents herr
+
+    _ <- lgr $ printf "ec: %s\nstdout:\n%s\nstderr:\n%s\n"
+            (show ec) (show out) (show err)
+
+    fx ec
   where
     fx (f @ (ExitFailure _)) = error $ printf "%s: %s %s" (show f) (show exe) (show argv)
     fx ExitSuccess = return ()
@@ -123,15 +151,42 @@ withMkTempWorkDir (Just wdir) tpl m = do
         | isAlreadyExistsError x = return ()
         | otherwise = ioError x
 
-git_clone :: FilePath -> String -> IO ()
-git_clone wdir uri = do
-    printf "git clone %s into %s" uri wdir
-    worker_cmd (Just wdir) "git" ["clone", uri, "repo"]
-
 data BuildRequest = GitBuildRequest
     { brUri   :: String
     , brHead  :: String
     }
+
+dirname :: BuildRequest -> String
+dirname (GitBuildRequest u h) = printf "%s-%s" (san u) (san h)
+  where
+    san :: String -> String
+    san = fmap (\x -> if isAlphaNum x then x else '_')
+
+clone
+    :: BuildRequest
+    -> FilePath
+    -> (String -> IO ())
+    -> IO ()
+clone (r @ (GitBuildRequest{})) wdir lgr = do
+    _ <- runCmd (Just wdir) "git" ["clone", brUri r, "repo"] lgr
+    _ <- runCmd (Just (wdir </> "repo")) "git" ["checkout", brHead r] lgr
+    return ()
+
+data LoggingNamespace = LoggingNamespace
+    { br    :: BuildRequest
+    , time  :: UTCTime
+    , dir   :: FilePath
+    }
+
+log :: LoggingNamespace -> String -> String -> IO ()
+log ln m msg = appendFile ((dir ln) </> m) msg
+
+mkLoggingNamespace :: BuildRequest -> IO LoggingNamespace
+mkLoggingNamespace br = do
+    t <- getCurrentTime
+    let lns = LoggingNamespace br t $ "/var/lib/ybs/logs" </> (dirname br) </> (formatTime defaultTimeLocale "%F.%T.%Z" t)
+    _ <- createDirectoryIfMissing True $ dir lns
+    return lns
 
 handle :: ConfigServer -> Socket -> IO ()
 handle cg conn = do
@@ -140,9 +195,8 @@ handle cg conn = do
         breq   = GitBuildRequest (head words') (words' !! 1)
 
     withMkTempWorkDir (work_dir cg) "XXXXXXX." $ \wdir -> do
-        git_clone wdir $ brUri breq
-        callCommand . printf
-            "cd %s && git checkout %s" (wdir </> "repo") $ brHead breq
+        lns <- mkLoggingNamespace breq
+        clone breq wdir (log lns "master")
 
         eex <- try . decodeFile $ wdir </> "repo" </> ".ybs.yml" :: IO (Either ParseException (Maybe YbsConfig))
 

@@ -22,6 +22,8 @@ library
         , unordered-containers >= 0.2.4.0
         , spawn
         , yaml
+        , time
+        , old-locale
     default-language:   Haskell2010
     exposed-modules:
         YacBuildServer
