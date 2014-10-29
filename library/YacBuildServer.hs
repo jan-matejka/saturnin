@@ -245,8 +245,8 @@ distribute'
 distribute' breq ybs_cg repo lgr (s, h) = do
     lgr "master" $ printf "running acceptance testsuite at %s for %s" h s
 
-    rwdir <- distributeSetup breq ybs_cg repo s h (lgr (show s))
-    distributeRunTest h rwdir (lgr (show s))
+    rwdir <- distributeSetup breq ybs_cg repo s h (lgr s)
+    distributeRunTest h rwdir (lgr s)
     return ()
 
 distributeRunTest
