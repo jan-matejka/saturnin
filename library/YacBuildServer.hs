@@ -4,7 +4,7 @@ module YacBuildServer
     )
 where
 
-import Prelude hiding (lookup)
+import Prelude hiding (lookup, log)
 import Control.Concurrent.Spawn
 import Control.Exception (try, catch, SomeException)
 import Network.Socket
@@ -15,11 +15,15 @@ import Data.Text (pack, unpack)
 import Data.List (dropWhileEnd)
 import Data.Char
 import Data.HashMap.Strict hiding (map)
+import Data.Time.Clock
+import Data.Time.Format
 import System.IO.Error
 import System.FilePath.Posix
 import System.Process
 import System.Exit
+import System.Locale
 import System.IO.Temp
+import System.IO
 import System.Directory
 
 import YacBuildServer.Ybs
@@ -99,15 +103,39 @@ loop cg sock = do
     ehandler :: SomeException -> IO ()
     ehandler ex = printf "Fatal error: %s\n" (show ex)
 
-worker_cmd :: Maybe FilePath -> String -> [String] -> IO ()
-worker_cmd wdir exe argv = do
-    (_, _, _, ph) <- createProcess $ (proc exe argv) { cwd = wdir }
-    rc <- waitForProcess ph
-    fx rc
+showCP :: CreateProcess -> String
+showCP c = printf "CreateProcess { cmdspec = %s, cwd = %s, env = %s }"
+    (showCmdSpec $ cmdspec c) (show $ cwd c) (show $ env c)
 
+showCmdSpec :: CmdSpec -> String
+showCmdSpec (RawCommand exe argv) = printf "RawCommand %s %s" (show exe) (show argv)
+showCmdSpec (ShellCommand cmd) = printf "ShellCommand %s" (show cmd)
+
+runCmd
+    :: Maybe FilePath       -- cwd
+    -> FilePath             -- exe
+    -> [String]             -- argv
+    -> (String -> IO ())    -- logger
+    -> IO (String)          -- out
+runCmd cwd' exe argv lgr = do
+    let cp = (proc exe argv)
+            { cwd       = cwd'
+            , std_out   = CreatePipe
+            , std_err   = CreatePipe
+            }
+    _ <- lgr $ printf "running: %s\n" (showCP cp)
+    (_, Just hout, Just herr, ph) <- createProcess cp
+    ec <- waitForProcess ph
+    out <- hGetContents hout
+    err <- hGetContents herr
+
+    _ <- lgr $ printf "ec: %s\nstdout:\n%s\nstderr:\n%s\n"
+            (show ec) (show out) (show err)
+
+    fx ec out
   where
-    fx (f @ (ExitFailure _)) = error $ printf "%s: %s %s" (show f) (show exe) (show argv)
-    fx ExitSuccess = return ()
+    fx (f @ (ExitFailure _)) _ = error $ printf "%s: %s %s" (show f) (show exe) (show argv)
+    fx ExitSuccess out = return out
 
 withMkTempWorkDir ::
        Maybe FilePath
@@ -123,44 +151,75 @@ withMkTempWorkDir (Just wdir) tpl m = do
         | isAlreadyExistsError x = return ()
         | otherwise = ioError x
 
-git_clone :: FilePath -> String -> IO ()
-git_clone wdir uri = do
-    printf "git clone %s into %s" uri wdir
-    worker_cmd (Just wdir) "git" ["clone", uri, "repo"]
+data BuildRequest = GitBuildRequest
+    { brUri   :: String
+    , brHead  :: String
+    }
+
+dirname :: BuildRequest -> String
+dirname (GitBuildRequest u h) = printf "%s-%s" (san u) (san h)
+  where
+    san :: String -> String
+    san = fmap (\x -> if isAlphaNum x then x else '_')
+
+clone
+    :: BuildRequest
+    -> FilePath
+    -> (String -> IO ())
+    -> IO ()
+clone (r @ (GitBuildRequest{})) wdir lgr = do
+    _ <- runCmd (Just wdir) "git" ["clone", brUri r, "repo"] lgr
+    _ <- runCmd (Just (wdir </> "repo")) "git" ["checkout", brHead r] lgr
+    return ()
+
+data LoggingNamespace = LoggingNamespace
+    { br    :: BuildRequest
+    , time  :: UTCTime
+    , dir   :: FilePath
+    }
+
+log :: LoggingNamespace -> String -> String -> IO ()
+log ln m msg = appendFile ((dir ln) </> (printf "%s.txt" m)) msg
+
+mkLoggingNamespace :: BuildRequest -> IO LoggingNamespace
+mkLoggingNamespace br = do
+    t <- getCurrentTime
+    let lns = LoggingNamespace br t $ "/var/lib/ybs/logs" </> (dirname br) </> (formatTime defaultTimeLocale "%F.%T.%Z" t)
+    _ <- createDirectoryIfMissing True $ dir lns
+    return lns
 
 handle :: ConfigServer -> Socket -> IO ()
 handle cg conn = do
     (bytes, _, _) <- recvFrom conn 1024
     let words' = words bytes
-        gituri = head words'
-        githead = words' !! 1
+        breq   = GitBuildRequest (head words') (words' !! 1)
 
     withMkTempWorkDir (work_dir cg) "XXXXXXX." $ \wdir -> do
-        git_clone wdir gituri
-        callCommand $ printf
-            "cd %s && git checkout %s" (wdir </> "repo") githead
+        lns <- mkLoggingNamespace breq
+        clone breq wdir (log lns "master")
 
         eex <- try . decodeFile $ wdir </> "repo" </> ".ybs.yml" :: IO (Either ParseException (Maybe YbsConfig))
 
         case eex of
             Left ex -> do
                 _ <- send conn "Can't parse your .ybs.yml\n"
-                print ex
-            Right ybs_cg -> distribute cg gituri githead ybs_cg $ wdir </> "repo"
+                _ <- log lns "master" $ show ex
+                return ()
+            Right ybs_cg -> distribute cg breq ybs_cg (wdir </> "repo") (log lns)
 
     _ <- close conn
     return ()
 
 distribute
     :: ConfigServer
-    -> String
-    -> String
+    -> BuildRequest
     -> Maybe YbsConfig
     -> FilePath         -- path to repo
+    -> (FilePath -> String -> IO ())
     -> IO ()
-distribute _ _ _ Nothing _ = printf "Failed to parse .ybs.yml"
-distribute cg gituri githead (Just ybs_cg) repo =
-    parMapIO_ (distributor gituri githead ybs_cg repo) . toList . filterMachines (os ybs_cg) $ machines cg
+distribute _ _ Nothing _ lgr = lgr "master" "Failed to parse .ybs.yml"
+distribute cg breq (Just ybs_cg) repo lgr =
+    parMapIO_ (distributor breq ybs_cg repo lgr) . toList . filterMachines (os ybs_cg) $ machines cg
   where
     distributor a b c d e = catch (distribute' a b c d e) handler
     handler :: SomeException -> IO ()
@@ -169,55 +228,53 @@ distribute cg gituri githead (Just ybs_cg) repo =
 filterMachines :: [Os] -> HashMap Os Hostname -> HashMap Os Hostname
 filterMachines ss xs = filterWithKey (\k _ -> elem k ss) xs
 
-remoteCallCommand :: Hostname -> String -> IO (String, String)
-remoteCallCommand h cmd = do
-    _ <- printf "[%s]: %s\n" h cmd
-    (rc, out, err) <- readProcessWithExitCode "ssh" [h, cmd] ""
-    _ <- printf "[%s]: last stdout:\n%s\n" h out
-    _ <- printf "[%s]: last stderr:\n%s\n" h err
-    case rc of
-        ExitSuccess -> return (out, err)
-        (ExitFailure {}) -> error $ printf "[%s]: %s: %s" h (show rc) (show cmd)
+remoteCallCommand
+    :: Hostname
+    -> (String -> IO ())
+    -> String
+    -> IO (String)
+remoteCallCommand h lgr cmd = runCmd Nothing "ssh" [h, cmd] lgr
 
 distribute'
-    :: String           -- git uri
-    -> String           -- git head
+    :: BuildRequest
     -> YbsConfig
     -> FilePath         -- repo
+    -> (FilePath -> String -> IO ())
     -> (Os, Hostname)
     -> IO ()
-distribute' gu gh ybs_cg repo (s, h) = do
-    putStrLn $ printf "running acceptance testsuite at %s for %s" h s
+distribute' breq ybs_cg repo lgr (s, h) = do
+    lgr "master" $ printf "running acceptance testsuite at %s for %s" h s
 
-    rwdir <- distributeSetup gu gh ybs_cg repo s h
-    distributeRunTest h rwdir
+    rwdir <- distributeSetup breq ybs_cg repo s h (lgr s)
+    distributeRunTest h rwdir (lgr s)
     return ()
 
 distributeRunTest
     :: Hostname
     -> FilePath
+    -> (String -> IO ())
     -> IO ()
-distributeRunTest h d = (remoteCallCommand h $ printf
+distributeRunTest h d lgr = (remoteCallCommand h lgr $ printf
     "cd %s && cabal test" d) >> return ()
 
 distributeSetup
-    :: String           -- git uri
-    -> String           -- git head
+    :: BuildRequest
     -> YbsConfig
     -> FilePath         -- repo
     -> Os
     -> Hostname
+    -> (String -> IO ())
     -> IO (FilePath)    -- remote workdir
-distributeSetup gu gh ybs_cg repo s h = do
-    (out, _) <- remoteCallCommand h "mktemp -dt 'ybs.XXXXXX'"
+distributeSetup breq ybs_cg repo s h lgr = do
+    out  <- remoteCallCommand h lgr "mktemp -dt 'ybs.XXXXXX'"
     distributeOsUpload h repo s $ os_upload ybs_cg
 
     let rwdir = dropWhileEnd isSpace out
 
-    _ <- remoteCallCommand h $ printf "cd %s && git clone %s r && cd r && git checkout %s"
-        rwdir gu gh
+    _ <- remoteCallCommand h lgr $ printf "cd %s && git clone %s r && cd r && git checkout %s"
+        rwdir (brUri breq) (brHead breq)
 
-    _ <- remoteCallCommand h $ printf "cd %s && cabal sandbox init && cabal update && PATH=\"/root/.cabal/bin:$PATH\" cabal install --only-dependencies -j --enable-tests"
+    _ <- remoteCallCommand h lgr $ printf "cd %s && cabal sandbox init && cabal update && PATH=\"/root/.cabal/bin:$PATH\" cabal install --only-dependencies -j --enable-tests"
         (rwdir </> "r")
 
     return $ rwdir </> "r"
