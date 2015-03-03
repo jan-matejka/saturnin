@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings, DeriveGeneric #-}
 module YacBuildServer.Ybs
-    ( Os
+    ( MachineDescription
     , YbsConfig (..)
     , OsUploadConfig (..)
     , decodeFile
@@ -11,7 +11,7 @@ where
 import Data.Yaml
 import GHC.Generics
 
-type Os = String
+type MachineDescription = String
 
 data OsUploadConfig = OsUploadConfig
     { source :: FilePath
@@ -21,7 +21,7 @@ data OsUploadConfig = OsUploadConfig
 instance FromJSON OsUploadConfig
 
 data YbsConfig = YbsConfig
-    { os    :: [Os]
+    { machineDescription :: [MachineDescription]
     , os_upload :: Maybe OsUploadConfig
     }
     deriving (Show, Generic)

@@ -32,7 +32,7 @@ data ConfigServer = ConfigServer
     { listen_addr   :: Maybe String
     , listen_port   :: Maybe String
     , work_dir      :: Maybe FilePath
-    , machines      :: HashMap Os Hostname
+    , machines      :: HashMap MachineDescription Hostname
     }
 
 instance Default ConfigServer where
@@ -51,7 +51,7 @@ rightOrErr :: Either String Ini -> Ini
 rightOrErr (Right x) = x
 rightOrErr (Left  x) = error x
 
-readMachinesConfig :: Maybe FilePath -> IO (HashMap Os Hostname)
+readMachinesConfig :: Maybe FilePath -> IO (HashMap MachineDescription Hostname)
 readMachinesConfig Nothing = readMachinesConfig $ Just "/etc/ybs/machines"
 readMachinesConfig (Just fp) = do
     f <- readFile fp
@@ -219,13 +219,13 @@ distribute
     -> IO ()
 distribute _ _ Nothing _ lgr = lgr "master" "Failed to parse .ybs.yml"
 distribute cg breq (Just ybs_cg) repo lgr =
-    parMapIO_ (distributor breq ybs_cg repo lgr) . toList . filterMachines (os ybs_cg) $ machines cg
+    parMapIO_ (distributor breq ybs_cg repo lgr) . toList . filterMachines (machineDescription ybs_cg) $ machines cg
   where
     distributor a b c d e = catch (distribute' a b c d e) handler
     handler :: SomeException -> IO ()
     handler ex = print ex
 
-filterMachines :: [Os] -> HashMap Os Hostname -> HashMap Os Hostname
+filterMachines :: [MachineDescription] -> HashMap MachineDescription Hostname -> HashMap MachineDescription Hostname
 filterMachines ss xs = filterWithKey (\k _ -> elem k ss) xs
 
 remoteCallCommand
@@ -240,7 +240,7 @@ distribute'
     -> YbsConfig
     -> FilePath         -- repo
     -> (FilePath -> String -> IO ())
-    -> (Os, Hostname)
+    -> (MachineDescription, Hostname)
     -> IO ()
 distribute' breq ybs_cg repo lgr (s, h) = do
     lgr "master" $ printf "running acceptance testsuite at %s for %s" h s
@@ -261,7 +261,7 @@ distributeSetup
     :: BuildRequest
     -> YbsConfig
     -> FilePath         -- repo
-    -> Os
+    -> MachineDescription
     -> Hostname
     -> (String -> IO ())
     -> IO (FilePath)    -- remote workdir
@@ -282,7 +282,7 @@ distributeSetup breq ybs_cg repo s h lgr = do
 distributeOsUpload
     :: Hostname
     -> FilePath
-    -> Os
+    -> MachineDescription
     -> Maybe OsUploadConfig
     -> IO ()
 distributeOsUpload _ _ _ Nothing = return ()
