@@ -1,4 +1,4 @@
-module YacBuildServerSpec (spec) where
+module YacBuildServer.ServerSpec (spec) where
 
 import Test.Hspec
 

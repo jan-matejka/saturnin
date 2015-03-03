@@ -1,17 +1,17 @@
 {-# LANGUAGE OverloadedStrings, DeriveGeneric #-}
 module YacBuildServer.Ybs
-    ( MachineDescription
-    , YbsConfig (..)
+    ( YbsConfig (..)
     , OsUploadConfig (..)
-    , decodeFile
     , ParseException (..)
+    , readYbsConfig
     )
 where
 
 import Data.Yaml
 import GHC.Generics
+import System.FilePath.Posix
 
-type MachineDescription = String
+import YacBuildServer.Types
 
 data OsUploadConfig = OsUploadConfig
     { source :: FilePath
@@ -27,3 +27,6 @@ data YbsConfig = YbsConfig
     deriving (Show, Generic)
 
 instance FromJSON YbsConfig
+
+readYbsConfig :: FilePath -> IO (Either ParseException YbsConfig)
+readYbsConfig p = decodeFileEither (p </> ".ybs.yml")

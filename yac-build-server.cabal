@@ -24,10 +24,14 @@ library
         , yaml
         , time
         , old-locale
+        , formatting
     default-language:   Haskell2010
     exposed-modules:
-        YacBuildServer
-        , YacBuildServer.Ybs
+          YacBuildServer.Ybs
+        , YacBuildServer.Server
+        , YacBuildServer.Server.Config
+        , YacBuildServer.Logging
+        , YacBuildServer.Types
     ghc-options:
         -Wall
     ghc-prof-options:
@@ -61,27 +65,7 @@ test-suite tests
     main-is:
         Spec.hs
     other-modules:
-        YacBuildServer
-        , YacBuildServerSpec
-    type:
-        exitcode-stdio-1.0
-
-test-suite acceptance
-    build-depends:
-        base < 5
-        , YacBuildServer
-        , hspec
-    default-language:
-        Haskell2010
-    ghc-options:
-        -Wall
-    hs-source-dirs:
-        library
-        tests/acceptance
-    main-is:
-        Spec.hs
-    other-modules:
-        YacBuildServer
+        YacBuildServer.ServerSpec
     type:
         exitcode-stdio-1.0
 
