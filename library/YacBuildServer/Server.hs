@@ -50,17 +50,16 @@ mainWithConf cg = do
 
     logInfo $ format ("Listening on " % shown) addr
     _ <- listen sock 5
-    loop cg sock
+    mapM_ acceptConnection $ repeat (cg, sock)
 
-loop :: ConfigServer -> Socket -> IO ()
-loop cg sock = do
+acceptConnection :: (ConfigServer, Socket) -> IO ()
+acceptConnection (cg, sock) = do
     (conn, addr) <- accept sock
     logInfo $ format ("connected: " % shown) addr
-    catch (handleConnection cg conn) ehandler
-    loop cg sock
+    catch (handleConnection cg conn) ehandle
   where
-    ehandler :: SomeException -> IO ()
-    ehandler ex = logError $ format ("Fatal error: " % shown) ex
+    ehandle :: SomeException -> IO ()
+    ehandle = logError . format ("Fatal error: " % shown)
 
 handleConnection :: ConfigServer -> Socket -> IO ()
 handleConnection cg conn = do
