@@ -16,6 +16,7 @@ import System.Exit
 
 
 import Control.Exception
+import Data.Maybe
 import Data.Text.Lazy (Text, pack, unpack)
 import Formatting
 import Network.Socket hiding (mkSocket)
@@ -37,7 +38,14 @@ main = do
         Right cg' -> mainWithConf cg'
 
 mainWithConf :: ConfigServer -> IO ()
-mainWithConf cg = listenForRequests cg
+mainWithConf cg = createWorkDir cg >> listenForRequests cg
+
+createWorkDir :: ConfigServer -> IO ()
+createWorkDir cg = modifyIOError ehandle mkWdir
+  where
+    mkWdir = createDirectoryIfMissing True . fromJust $ work_dir cg
+    ehandle e = ioeSetErrorString e
+        ((++) "Failed to create working directory" $ ioeGetErrorString e)
 
 listenForRequests :: ConfigServer -> IO ()
 listenForRequests cg =
@@ -74,7 +82,7 @@ handleConnection cg conn = do
     let words' = words bytes
         breq   = GitBuildRequest (head words') (words' !! 1)
 
-    withMkTempWorkDir (work_dir cg) "XXXXXXX." $ \wdir -> do
+    withTempDirectory (fromJust $ work_dir cg) "XXXXXXX." $ \wdir -> do
         jlp <- jobLogPath breq
         _ <- createDirectoryIfMissing True jlp
         clone breq wdir (jobLog jlp "master")
@@ -90,20 +98,6 @@ handleConnection cg conn = do
 
     _ <- close conn
     return ()
-
-withMkTempWorkDir ::
-       Maybe FilePath
-    -> String
-    -> (FilePath -> IO a)
-    -> IO a
-withMkTempWorkDir Nothing _ _ = error "Missing initial workdir"
-withMkTempWorkDir (Just wdir) tpl m = do
-    catchIOError (createDirectory wdir) mkWdirErrHandler
-    withTempDirectory wdir tpl m
-  where
-    mkWdirErrHandler x
-        | isAlreadyExistsError x = return ()
-        | otherwise = ioError x
 
 clone
     :: BuildRequest
