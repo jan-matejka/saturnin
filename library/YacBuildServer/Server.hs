@@ -18,7 +18,7 @@ import System.Exit
 import Control.Exception
 import Data.Text.Lazy (Text, pack, unpack)
 import Formatting
-import Network.Socket
+import Network.Socket hiding (mkSocket)
 import System.Directory
 import System.FilePath.Posix
 import System.IO
@@ -37,20 +37,27 @@ main = do
         Right cg' -> mainWithConf cg'
 
 mainWithConf :: ConfigServer -> IO ()
-mainWithConf cg = do
-    addrinfos <- getAddrInfo
-        (Just defaultHints {addrFamily = AF_INET})
-        (listen_addr cg)
-        (listen_port cg)
+mainWithConf cg = listenForRequests cg
 
-    let addr = head addrinfos
+listenForRequests :: ConfigServer -> IO ()
+listenForRequests cg =
+    mkSocket >>= mapM_ acceptConnection . repeat . (,) cg
+  where
+    mkSocket = do
+        addrinfos <- getAddrInfo
+            (Just defaultHints {addrFamily = AF_INET})
+            (listen_addr cg)
+            (listen_port cg)
 
-    sock <- socket (addrFamily addr) Stream defaultProtocol
-    _ <- bind sock $ addrAddress addr
+        let addr = head addrinfos
 
-    logInfo $ format ("Listening on " % shown) addr
-    _ <- listen sock 5
-    mapM_ acceptConnection $ repeat (cg, sock)
+        sock <- socket (addrFamily addr) Stream defaultProtocol
+        _ <- bind sock $ addrAddress addr
+
+        logInfo $ format ("Listening on " % shown) addr
+        _ <- listen sock 5
+
+        return sock
 
 acceptConnection :: (ConfigServer, Socket) -> IO ()
 acceptConnection (cg, sock) = do
