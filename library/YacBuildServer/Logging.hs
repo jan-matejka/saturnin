@@ -22,7 +22,7 @@ import System.Locale
 import YacBuildServer.Types
 
 serverLog :: FilePath
-serverLog = "/var/lib/ybs.log"
+serverLog = "/var/log/ybs.log"
 
 _log :: String -> IO ()
 _log = appendFile serverLog
@@ -53,18 +53,18 @@ logInfo x = do
 jobLogs :: FilePath
 jobLogs = "/var/lib/ybs/job-logs"
 
-jobLogPath :: BuildRequest -> IO FilePath
+jobLogPath :: JobRequest -> IO FilePath
 jobLogPath r = do
     t <- getCurrentTime
     return
         $   jobLogs
-        </> (dirname r)
+        </> dirname
         </> fmt t
   where
     fmt = formatTime defaultTimeLocale "%F.%T.%Z"
 
-    dirname :: BuildRequest -> String
-    dirname (GitBuildRequest u h) = (san u) <> "-" <> (san h)
+    dirname :: String
+    dirname = san $ show r
 
     san :: String -> String
     san = fmap (\x -> if isAlphaNum x then x else '_')

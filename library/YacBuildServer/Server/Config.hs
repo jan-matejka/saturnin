@@ -34,7 +34,7 @@ instance Default ConfigServer where
 readConfig :: IO (Either ParseException ConfigServer)
 readConfig = do
     tmp <- getTemporaryDirectory
-    cg  <- decodeFileEither "/etc/ybs.ini"
+    cg  <- decodeFileEither "/etc/ybs.yml"
     return $ fmap (defWorkDir tmp) cg
   where
     defWorkDir t (cg @ ConfigServer { work_dir = Nothing }) =
