@@ -59,7 +59,7 @@ acceptConnection (cg, sock) = do
     catch (handleConnection cg conn) ehandle
   where
     ehandle :: SomeException -> IO ()
-    ehandle = logError . format ("Fatal error: " % shown)
+    ehandle = logError . format ("handleConnection: " % shown)
 
 handleConnection :: ConfigServer -> Socket -> IO ()
 handleConnection cg conn = do
