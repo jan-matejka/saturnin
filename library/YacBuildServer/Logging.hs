@@ -2,10 +2,13 @@
 module YacBuildServer.Logging
     ( logError
     , logInfo
+    , logShown
+    , logShownPrefix
     , jobLogPath
     , jobLog
     , Logger
     , DistributedJobLogger
+    , Message
     )
 where
 
@@ -49,6 +52,11 @@ logInfo x = do
     m = _msg "info" x
     logStd = putStr
 
+logShown :: Show x => x -> IO ()
+logShown = logError . format shown
+
+logShownPrefix :: Show x => Text -> x -> IO ()
+logShownPrefix p x = logError $ format (text % shown) p x
 
 jobLogs :: FilePath
 jobLogs = "/var/lib/ybs/job-logs"

@@ -26,6 +26,10 @@ library
         , old-locale
         , formatting
         , bytestring
+        , stm
+        , mtl
+        , either
+        , exceptions
     default-language:   Haskell2010
     exposed-modules:
           YacBuildServer.Ybs

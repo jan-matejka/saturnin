@@ -2,6 +2,8 @@
 module YacBuildServer.Server.Config
     ( ConfigServer (..)
     , readConfig
+    , MachineDescription
+    , Hostname
     )
 where
 
@@ -12,7 +14,8 @@ import GHC.Generics
 import System.Directory
 import System.FilePath.Posix
 
-import YacBuildServer.Types
+type MachineDescription = String
+type Hostname = String
 
 data ConfigServer = ConfigServer
     { listen_addr   :: Maybe String
@@ -35,6 +38,7 @@ readConfig :: IO (Either ParseException ConfigServer)
 readConfig = do
     tmp <- getTemporaryDirectory
     cg  <- decodeFileEither "/etc/ybs.yml"
+
     return $ fmap (defWorkDir tmp) cg
   where
     defWorkDir t (cg @ ConfigServer { work_dir = Nothing }) =
