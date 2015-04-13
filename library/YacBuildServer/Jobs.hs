@@ -37,11 +37,11 @@ readConfigFromRepo
 readConfigFromRepo s = fmap decodeEither' . readFile s ".ybs.yml"
 
 process :: ConfigServer -> Socket -> JobRequest -> IO ()
-process cg c (r @ (CabalTestRequest s)) =
+process cg c r =
     withSystemTempDirectory "XXXXXXX." proc
   where
     proc w = do
-        rcg' <- readConfigFromRepo s w
+        rcg' <- readJobConfig r w
 
         jlp <- jobLogPath r
         _   <- createDirectoryIfMissing True jlp
@@ -64,6 +64,9 @@ process cg c (r @ (CabalTestRequest s)) =
     logResults :: DistributedJobLogger -> Either SomeException JobResult -> IO ()
     logResults l (Left e) = l "master" . pack $ show e
     logResults l (Right (TestResult m cs)) = l m . pack $ show cs
+
+    readJobConfig (CabalTestRequest s) = readConfigFromRepo s
+    readJobConfig (MakeCheckRequest s) = readConfigFromRepo s
 
 filterMachines
     :: [MachineDescription]
@@ -131,13 +134,13 @@ remoteProcess (CabalTestRequest s) _ md h _ = do
     d <- (dropWhileEnd isSpace . fst)
         <$> remoteCmd h  "mktemp -dt 'ybs.XXXXXX'"
 
-    c1 <- exe $ format (
+    c1 <- exe h $ format (
         "cd " % string %
         " && git clone " % text %
         " r && cd r && git checkout " % text
       ) d (uri $ gsUri s) (revOrRef $ gsRevOrRef s)
 
-    c2 <- exe $
+    c2 <- exe h $
         format (
             "cd " % string %
             " && cabal sandbox init && cabal update" %
@@ -145,12 +148,31 @@ remoteProcess (CabalTestRequest s) _ md h _ = do
             " --only-dependencies -j --enable-tests"
         ) (d </> "r")
 
-    c3 <- exe $
+    c3 <- exe h $
         format ("cd " % string % " && cabal test") (d </> "r")
 
     return $ TestResult md [c1, c2, c3]
-  where
-    exe = mkCmdResult (remoteCmd h)
+
+remoteProcess (MakeCheckRequest s) _ md h _ = do
+    d <- (dropWhileEnd isSpace . fst)
+        <$> remoteCmd h  "mktemp -dt 'ybs.XXXXXX'"
+
+    c1 <- exe h $ format (
+        "cd " % string %
+        " && git clone " % text %
+        " r && cd r && git checkout " % text
+      ) d (uri $ gsUri s) (revOrRef $ gsRevOrRef s)
+
+    c2 <- exe h $
+        format (
+            "cd " % string %
+            " && make check"
+        ) (d </> "r")
+
+    return $ TestResult md [c1, c2]
+
+exe :: Hostname -> Text -> IO CmdResult
+exe h c = mkCmdResult (remoteCmd h) c
 
 remoteCmd
     :: Hostname

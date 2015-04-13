@@ -17,4 +17,5 @@ data BuildRequest = GitBuildRequest
     }
 
 data JobRequest = CabalTestRequest GitSource
+                | MakeCheckRequest GitSource
     deriving (Show, Read)
