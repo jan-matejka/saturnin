@@ -32,9 +32,8 @@ library
         , exceptions
     default-language:   Haskell2010
     exposed-modules:
-          YacBuildServer.Ybs
           YacBuildServer.Git
-          YacBuildServer.Jobs
+        , YacBuildServer.Jobs
         , YacBuildServer.Server
         , YacBuildServer.Server.Config
         , YacBuildServer.Logging

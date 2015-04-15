@@ -29,6 +29,7 @@ data BuildRequest = GitBuildRequest
 data JobRequest = TestRequest
                 { testType    :: TestType
                 , dataSource :: GitSource
+                , testMachines   :: [MachineDescription]
                 }
     deriving (Show, Read)
 

@@ -21,14 +21,11 @@ import Formatting hiding (bind)
 import Network.Socket hiding (mkSocket)
 import System.Directory
 import System.IO hiding (readFile)
-import System.IO.Temp
 
 import YacBuildServer.Jobs
 import YacBuildServer.Logging
 import YacBuildServer.Server.Config
 import YacBuildServer.Types
-import YacBuildServer.Ybs
-import YacBuildServer.Git
 
 
 runYBServer :: IO ()
@@ -110,29 +107,13 @@ ybsAccept (Just x) = mapM_ ((handle' =<<) . accept') $ repeat x
 ybsAccept Nothing = return ()
 
 
-ybsReadJobConfig
-    :: Socket
-    -> JobRequest
-    -> YbsLogger
-    -> YBServer (Maybe YbsConfig)
-ybsReadJobConfig c r lgr = do
-    rcg <- liftIO . readConfigFromRepo $ dataSource r
-    whenLeft rcg $ \x -> do
-        _ <- liftIO $ send c (show x)
-        lgr "master" . pack $ show x
-    return $ rightToMaybe rcg
-
-
 distributeJob
     :: JobRequest
     -> DistributedJobLogger
-    -> Maybe YbsConfig
+    -> Maybe [(MachineDescription, Hostname)]
     -> YBServer [Either SomeException JobResult]
-distributeJob r lgr (Just rcg) = do
-    xs <- selectMachines (machineDescription rcg)
-    case xs of
-        Left  x -> liftIO (lgr "master" x) >> return []
-        Right x -> liftIO $ parMapIO distributeOne x
+distributeJob r lgr (Just xs) = do
+    liftIO $ parMapIO distributeOne xs
   where
     distributeOne x = catch
         ((Right <$>) . (liftIO . remoteProcess r) =<< logJobStart x)
@@ -156,11 +137,11 @@ distributeJob _ _ Nothing = return []
 
 -- | FIXME: Unhandled failure:
 -- when not all requested machines are available
-selectMachines
+ybsSelectMachines
     :: [MachineDescription]
-    -> YBServer (Either Text [(MachineDescription, Hostname)])
-selectMachines requested =
-    Right . filterMachines requested . machines <$> getConfig
+    -> YBServer (Maybe [(MachineDescription, Hostname)])
+ybsSelectMachines requested =
+    Just . filterMachines requested . machines <$> getConfig
 
 
 logJobResults
@@ -209,7 +190,7 @@ processJob :: Socket -> JobRequest -> YBServer ()
 processJob c r = do
     (ylgr, lgr) <- getLogger r
 
-    ybsReadJobConfig        c r ylgr
+    ybsSelectMachines (testMachines r)
         >>= distributeJob     r lgr
         >>= logJobResults   c   ylgr
         >> closeConnection  c
@@ -219,10 +200,3 @@ filterMachines
     -> HashMap MachineDescription Hostname
     -> [(MachineDescription, Hostname)]
 filterMachines ss xs = toList $ filterWithKey (\k _ -> elem k ss) xs
-
-
-readConfigFromRepo
-    :: GitSource
-    -> IO (Either ParseException YbsConfig)
-readConfigFromRepo s = withSystemTempDirectory "XXXXXXX." $
-    fmap decodeEither' . readFile s ".ybs.yml"
