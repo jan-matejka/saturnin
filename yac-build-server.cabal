@@ -60,13 +60,15 @@ test-suite tests
     build-depends:
         base < 5
         , YacBuildServer
+        , mtl
+        , either
+        , data-default
         , hspec
     default-language:
         Haskell2010
     ghc-options:
         -Wall
     hs-source-dirs:
-        library
         tests/unit
     main-is:
         Spec.hs

@@ -6,17 +6,17 @@ module YacBuildServer.Types
     , JobRequest (..)
     , TestType (..)
     , GitSource (..)
-    , YbsLogger
     , YBServer
     , YBServerState (..)
     , fst3
+    , TestResult (..)
+    , anyEither
+    , isPassed
     )
 where
 
 import Control.Monad.State
 import Data.Default
-import Data.Text.Lazy
-
 
 import YacBuildServer.Git
 import YacBuildServer.Server.Config
@@ -26,6 +26,8 @@ data BuildRequest = GitBuildRequest
     , brHead  :: String
     }
 
+-- | JobRequest specifies job to be run. This is what client send to the
+-- job server.
 data JobRequest = TestRequest
                 { testType    :: TestType
                 , dataSource :: GitSource
@@ -46,8 +48,19 @@ instance Default YBServerState where
 type YBServer a = StateT YBServerState IO a
 
 
+-- | fst for three-tuple
 fst3 :: forall t t1 t2.  (t, t1, t2) -> t
 fst3 (x, _, _) = x
 
 
-type YbsLogger = (MachineDescription -> Text -> YBServer ())
+data TestResult = Passed | Failed | FailedSetup
+    deriving (Show, Read)
+
+isPassed :: TestResult -> Bool
+isPassed Passed = True
+isPassed _ = False
+
+-- | Returns any thing in Either. Be it Left or Right.
+anyEither :: Either a a -> a
+anyEither (Left  x) = x
+anyEither (Right x) = x

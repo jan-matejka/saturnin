@@ -15,12 +15,12 @@ import Data.Either.Combinators
 import Data.Default
 import Data.HashMap.Strict
 import Data.Maybe
-import Data.Monoid ((<>))
-import Data.Text.Lazy hiding (head)
+import Data.Text.Lazy hiding (head, all)
 import Formatting hiding (bind)
 import Network.Socket hiding (mkSocket)
 import System.Directory
 import System.IO hiding (readFile)
+import Text.Read hiding (get)
 
 import YacBuildServer.Jobs
 import YacBuildServer.Logging
@@ -88,76 +88,83 @@ ybsListen Nothing = return Nothing
 
 
 ybsAccept :: Maybe Socket -> YBServer ()
-ybsAccept (Just x) = mapM_ ((handle' =<<) . accept') $ repeat x
-  where
-    accept' :: Socket -> YBServer Socket
-    accept' sock = do
-        (conn, addr) <- liftIO $ accept sock
-        liftIO . logInfo $ format ("connected: " % shown) addr
-        return conn
-
-    handle' :: Socket -> YBServer ()
-    handle' conn = catch
-        (liftIO (readJob conn) >>= processJob conn)
-        (liftIO . logShownPrefix "handleConnection: " :: SomeException -> YBServer ())
-
-    readJob :: Socket -> IO JobRequest
-    readJob c =  (read . fst3) <$> recvFrom c 1024
-
+ybsAccept (Just x) = mapM_ ((ybsHandleConnection =<<) . (liftIO . accept)) $ repeat x
 ybsAccept Nothing = return ()
 
+ybsMkJob :: (Socket, Maybe JobRequest) -> YBServer (Socket, Maybe Job)
+ybsMkJob (c, Just x) = do
+    ms   <- ybsSelectMachines x
+    l <- getLogger x
 
-distributeJob
-    :: JobRequest
-    -> DistributedJobLogger
-    -> Maybe [(MachineDescription, Hostname)]
-    -> YBServer [Either SomeException JobResult]
-distributeJob r lgr (Just xs) = do
-    liftIO $ parMapIO distributeOne xs
+    return . (,) c . Just $ Job
+        { jobLogger = l "master"
+        , remoteJobs = (\(m, h) -> mkRemoteJob x (l m) c m h) <$> ms
+        , request = x
+        , jobConnection = c
+        }
+ybsMkJob (x, _) = return $ (x, Nothing)
+
+whenNothing :: Applicative m => Maybe a -> m () -> m ()
+whenNothing (Just _) _ = pure ()
+whenNothing Nothing f = f
+
+ybsReadJobRequest :: Socket -> YBServer (Socket, Maybe JobRequest)
+ybsReadJobRequest c = do
+    bytes <- liftIO $ fst3 <$> recvFrom c 1024
+    let mjr = readMaybe bytes
+    liftIO . whenNothing mjr
+        $ logShownPrefix "failed readJobRequest " bytes
+    return $ (c, mjr)
+
+logConnection :: (Socket, SockAddr) -> YBServer Socket
+logConnection (x, y) =
+    (liftIO . logInfo $ format ("connected: " % shown) y)
+        >> return x
+
+ybsHandleConnection :: (Socket, SockAddr) -> YBServer ()
+ybsHandleConnection x =
+    logConnection x
+        >>= ybsReadJobRequest
+        >>= ybsMkJob
+        >>= ybsDistributeJob
+        >>= reportJobResult
+        >>= closeConnection
+
+ybsDistributeJob
+    :: (Socket, Maybe Job)
+    -> YBServer (Socket, Maybe (Job, [JobResult]))
+ybsDistributeJob (s, Just x) = do
+    y <- liftIO $ (,) s . Just . (,) x <$> parMapIO runRemoteJob (remoteJobs x)
+    return y
+ybsDistributeJob (x, Nothing) = return (x, Nothing)
+
+reportJobResult
+    :: (Socket, Maybe (Job, [JobResult]))
+    -> YBServer Socket
+reportJobResult (s, Just (j, xs)) = do
+    let msg = format (
+            "\n\n\nJob finished: " %shown% "\n" %
+            "Job results: " %shown% "\n" %
+            "Overal result: " %shown% "\n"
+            ) (request j) xs overall
+
+    _ <- liftIO $ (jobLogger j) msg
+    _ <- liftIO $ (void . send (jobConnection j) . unpack) msg
+    return s
   where
-    distributeOne x = catch
-        ((Right <$>) . (liftIO . remoteProcess r) =<< logJobStart x)
-        (return . Left)
+    overall = if all isPassed $ result <$> xs
+              then Passed
+              else Failed
 
-
-    logJobStart
-        :: (MachineDescription, Hostname)
-        -> IO (MachineDescription, Hostname)
-    logJobStart (md, h) = do
-        lgr "master" $ format
-            ( "Starting: " % shown
-            % " for " % string
-            % " at " % string
-            % "\n"
-            ) r md h
-        return (md, h)
-
-distributeJob _ _ Nothing = return []
-
+reportJobResult (s, _) = return s
 
 -- | FIXME: Unhandled failure:
 -- when not all requested machines are available
 ybsSelectMachines
-    :: [MachineDescription]
-    -> YBServer (Maybe [(MachineDescription, Hostname)])
-ybsSelectMachines requested =
-    Just . filterMachines requested . machines <$> getConfig
-
-
-logJobResults
-    :: Socket
-    -> YbsLogger
-    -> [Either SomeException JobResult]
-    -> YBServer ()
-logJobResults c lgr xs = do
-    mapM_ log' xs
-    void . liftIO . send c $ (show xs <> "\n")
-    return ()
-  where
-    log' :: Either SomeException JobResult -> YBServer ()
-    log' (Left e)                  = lgr "master" . pack $ show e
-    log' (Right (TestResult m cs)) = lgr m        . pack $ show cs
-
+    :: JobRequest
+    -> YBServer [(MachineDescription, Hostname)]
+ybsSelectMachines r =
+    (filterMachines (testMachines r) . machines) <$> getConfig
 
 closeConnection
     :: Socket
@@ -168,32 +175,11 @@ closeConnection c = do
     _ <- liftIO $ hClose h
     return ()
 
--- | The loggers are the same, only fst one is YBServer () and snd one is
--- pure IO ()
-getLogger :: JobRequest -> YBServer (YbsLogger, DistributedJobLogger)
+getLogger :: JobRequest -> YBServer DistributedJobLogger
 getLogger r = do
     jlp <- liftIO $ jobLogPath r
     _   <- liftIO $ createDirectoryIfMissing True jlp
-
-    return $ (ybsJobLog jlp, jobLog jlp)
-
-
-ybsJobLog
-    :: FilePath
-    -> MachineDescription
-    -> Message
-    -> YBServer ()
-ybsJobLog f md m = liftIO $ jobLog f md m
-
-
-processJob :: Socket -> JobRequest -> YBServer ()
-processJob c r = do
-    (ylgr, lgr) <- getLogger r
-
-    ybsSelectMachines (testMachines r)
-        >>= distributeJob     r lgr
-        >>= logJobResults   c   ylgr
-        >> closeConnection  c
+    return $ jobLog jlp
 
 filterMachines
     :: [MachineDescription]
