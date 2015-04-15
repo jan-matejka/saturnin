@@ -4,7 +4,7 @@ module YacBuildServer.Types
     , Hostname
     , BuildRequest (..)
     , JobRequest (..)
-    , gitSource
+    , TestType (..)
     , GitSource (..)
     , YbsLogger
     , YBServer
@@ -26,13 +26,14 @@ data BuildRequest = GitBuildRequest
     , brHead  :: String
     }
 
-data JobRequest = CabalTestRequest GitSource
-                | MakeCheckRequest GitSource
+data JobRequest = TestRequest
+                { testType    :: TestType
+                , dataSource :: GitSource
+                }
     deriving (Show, Read)
 
-gitSource :: JobRequest -> GitSource
-gitSource (CabalTestRequest s) = s
-gitSource (MakeCheckRequest s) = s
+data TestType = CabalTest | MakeCheckTest
+    deriving (Show, Read)
 
 data YBServerState = YBServerState
     { ybssConfig :: ConfigServer

@@ -43,7 +43,7 @@ remoteProcess
     :: JobRequest
     -> (MachineDescription, Hostname)
     -> IO JobResult
-remoteProcess (CabalTestRequest s) (md, h) = do
+remoteProcess (TestRequest CabalTest s) (md, h) = do
     d <- (dropWhileEnd isSpace . fst)
         <$> remoteCmd h  "mktemp -dt 'ybs.XXXXXX'"
 
@@ -66,7 +66,7 @@ remoteProcess (CabalTestRequest s) (md, h) = do
 
     return $ TestResult md [c1, c2, c3]
 
-remoteProcess (MakeCheckRequest s) (md, h) = do
+remoteProcess (TestRequest MakeCheckTest s) (md, h) = do
     d <- (dropWhileEnd isSpace . fst)
         <$> remoteCmd h  "mktemp -dt 'ybs.XXXXXX'"
 

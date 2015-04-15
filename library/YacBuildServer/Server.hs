@@ -116,7 +116,7 @@ ybsReadJobConfig
     -> YbsLogger
     -> YBServer (Maybe YbsConfig)
 ybsReadJobConfig c r lgr = do
-    rcg <- liftIO . readConfigFromRepo $ gitSource r
+    rcg <- liftIO . readConfigFromRepo $ dataSource r
     whenLeft rcg $ \x -> do
         _ <- liftIO $ send c (show x)
         lgr "master" . pack $ show x
