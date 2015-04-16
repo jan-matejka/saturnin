@@ -11,7 +11,6 @@ import Control.Concurrent.Spawn
 import Control.Concurrent.STM
 import Control.Monad.State
 import Data.HashMap.Strict
-import Data.Monoid
 import Data.Text.Lazy hiding (head, all)
 import Data.Time.Clock
 import Formatting
@@ -35,16 +34,16 @@ readBytes = (\x -> liftIO $ fst3 <$> recvFrom x 1024) =<< (fst <$> get)
 
 -- | Log to both log file and the client connection
 logBoth :: Job -> Text -> JobRequestListenerConnectionHandler ()
-logBoth j x = logToConnection x >> (liftIO $ (jobLogger j) x)
+logBoth j x = logToConnection x >> (logJob j x)
+
+logJob :: Job -> Text -> JobRequestListenerConnectionHandler ()
+logJob j x = do
+    l <- liftIO . getJobLogger $ jobID j
+    liftIO $ l "master" x
 
 -- | Log to both server stderr and client connection
 logToServerAndConn :: Text -> JobRequestListenerConnectionHandler ()
 logToServerAndConn x = logToConnection x >> (lift $ logInfo x)
-
-logToConnection :: Text -> JobRequestListenerConnectionHandler ()
-logToConnection x = do
-    c <- (fst <$> get)
-    liftIO . void . send c $ unpack x <> "\n"
 
 handleConnection :: (Socket, SockAddr) -> YBServer ()
 handleConnection x = evalStateT handle' x
@@ -84,14 +83,10 @@ mkJob
 mkJob (Just x) = do
     ms   <- selectMachines x
     jid  <- getJobID
-    l    <- liftIO $ getJobLogger jid
-    c    <- fst <$> get
 
     return . Just $ Job
-        { jobLogger = l "master"
-        , remoteJobs = (\(m, h) -> mkRemoteJob x (l m) c m h) <$> ms
+        { remoteJobs = uncurry (mkRemoteJob x) <$> ms
         , request = x
-        , jobConnection = c
         , jobID = jid
         }
 mkJob Nothing = return Nothing
@@ -109,8 +104,16 @@ distributeJob
     :: Maybe Job
     -> JobRequestListenerConnectionHandler (Maybe (Job, [JobResult]))
 distributeJob (Just x) = do
-    y <- liftIO $ Just . (,) x <$> parMapIO runRemoteJob (remoteJobs x)
-    return y
+    baseLogger <- liftIO . getJobLogger $ jobID x
+    c <- fst <$> get
+    rs <- liftIO $ parMapIO runRemoteJob (rJobs x baseLogger $ logToConnection' c)
+    return $ Just (x, rs)
+  where
+    rJobs :: Job -> DistributedJobLogger -> Logger -> [RemoteJobRunnerState]
+    rJobs j l cL =
+        -- (\y -> (y, l $ jobMachine y, c)) <$> (remoteJobs j)
+        (\y -> RemoteJobRunnerState y (l $ jobMachine y) cL) <$> (remoteJobs j)
+
 distributeJob Nothing = return Nothing
 
 reportJobResult

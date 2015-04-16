@@ -7,6 +7,7 @@ module YacBuildServer.Jobs
     , RemoteJob (..)
     , mkRemoteJob
     , runRemoteJob
+    , RemoteJobRunnerState (..)
     )
 where
 
@@ -32,10 +33,8 @@ import YacBuildServer.Types
 -- needed to actually run the job - that is data derived from the
 -- JobRequest, eg.: [Hostname] instead of [MachineDescription]
 data Job = Job
-         { jobLogger        :: Logger
-         , remoteJobs       :: [RemoteJob]
+         { remoteJobs       :: [RemoteJob]
          , request          :: JobRequest
-         , jobConnection    :: Socket
          , jobID            :: JobID
          }
 
@@ -51,8 +50,6 @@ instance Show Job where
 data RemoteJob = TestJob
          { rJobTestType     :: TestType
          , rJobDataSource   :: GitSource
-         , rJobLogger       :: Logger
-         , rJobConnection   :: Socket
          , jobMachine       :: MachineDescription
          , jobHost          :: Hostname
          }
@@ -67,16 +64,24 @@ instance Show RemoteJob where
 
 mkRemoteJob
     :: JobRequest
-    -> Logger
-    -> Socket
     -> MachineDescription
     -> Hostname
     -> RemoteJob
 mkRemoteJob x = TestJob (testType x) (dataSource x)
 
-type RemoteJobRunner a = StateT RemoteJob IO a
+getJob :: RemoteJobRunner RemoteJob
+getJob = rJob <$> get
 
-runRemoteJob :: RemoteJob -> IO JobResult
+data RemoteJobRunnerState = RemoteJobRunnerState
+                          { rJob :: RemoteJob
+                          , rJobLogger :: Logger
+                          , cLogger :: Logger
+                          }
+type RemoteJobRunner a = StateT RemoteJobRunnerState IO a
+
+runRemoteJob
+    :: RemoteJobRunnerState
+    -> IO JobResult
 runRemoteJob x = evalStateT run x
   where
     run :: RemoteJobRunner JobResult
@@ -91,22 +96,31 @@ mkJobResult
     :: Either TestResult a
     -> RemoteJobRunner JobResult
 mkJobResult x = do
-    j <- get
+    j <- getJob
     return $ JobResult (jobMachine j) (getResult x)
   where
     getResult (Left  y) = y
     getResult (Right _) = Passed
+
+rJobLogToConnection :: Text -> RemoteJobRunner ()
+rJobLogToConnection x = do
+    c <- cLogger <$> get
+    liftIO $ c x
+
+logRemoteJob :: Text -> RemoteJobRunner ()
+logRemoteJob x = do
+    rJobLogToConnection x
+    rl <- rJobLogger <$> get
+    liftIO $ rl x
 
 -- | Run a command on the remote machine.
 -- Log the CmdResult to the job's log file and client connection.
 -- And return Right CmdResult on success or Left Failed on error.
 exe :: Text -> RemoteJobRunner (Either TestResult CmdResult)
 exe x = do
-    j <- get
+    j <- getJob
     r <- liftIO . remoteCmd x $ jobHost j
-    void . liftIO $ mapM_
-        (\f -> f . show $ anyEither r)
-        [rJobLogger j . pack, void . send (rJobConnection j)]
+    logRemoteJob . pack . show $ anyEither r
     return $ mapLeft (const Failed) r
 
 -- | Returns `Left FailedSetup` iff `Left _`
@@ -127,7 +141,7 @@ checkoutDataSource
     :: Either TestResult WorkDir
     -> RemoteJobRunner (Either TestResult WorkDir)
 checkoutDataSource (Right p) = do
-    j <- get
+    j <- getJob
     (<$>) (const repo) <$> (exe . cmd $ rJobDataSource j)
   where
     cmd s = format (
@@ -146,7 +160,7 @@ prepareEnvironment
     :: Either TestResult WorkDir
     -> RemoteJobRunner (Either TestResult WorkDir)
 prepareEnvironment (Right p) = do
-    j <- get
+    j <- getJob
     (<$>) (const p) <$> (exe' $ rJobTestType j)
   where
     exe' CabalTest = exe $ format (
@@ -162,7 +176,7 @@ runTest
     :: Either TestResult WorkDir
     -> RemoteJobRunner (Either TestResult CmdResult)
 runTest (Right p) = do
-    j <- get
+    j <- getJob
     exe . cmd $ rJobTestType j
   where
     cmd CabalTest = format ("cd " % text % " && cabal test") p
