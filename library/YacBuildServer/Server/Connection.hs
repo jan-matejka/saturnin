@@ -11,7 +11,7 @@ import Control.Concurrent.Spawn
 import Control.Concurrent.STM
 import Control.Monad.State
 import Data.HashMap.Strict
-import Data.Text.Lazy hiding (head, all)
+import Data.Text.Lazy hiding (head, all, length)
 import Data.Time.Clock
 import Formatting
 import Network.Socket
@@ -82,13 +82,20 @@ mkJob
     -> JobRequestListenerConnectionHandler (Maybe Job)
 mkJob (Just x) = do
     ms   <- selectMachines x
-    jid  <- getJobID
+    whenNothing ms $
+        logToServerAndConn "Unable to select all requested machines"
 
-    return . Just $ Job
-        { remoteJobs = uncurry (mkRemoteJob x) <$> ms
-        , request = x
-        , jobID = jid
-        }
+    mk ms
+  where
+    mk :: Maybe [(MachineDescription, Hostname)] -> JobRequestListenerConnectionHandler (Maybe Job)
+    mk (Just ms) = do
+        jid <- getJobID
+        return . Just $ Job
+            { remoteJobs = uncurry (mkRemoteJob x) <$> ms
+            , request = x
+            , jobID = jid
+            }
+    mk Nothing = return Nothing
 mkJob Nothing = return Nothing
 
 logJobStart
@@ -154,13 +161,16 @@ getJobID = do
         _ <- writeTVar x new
         return new
 
--- | FIXME: Unhandled failure:
--- when not all requested machines are available
+-- | Returns Nothing if all the request machines were not found
+-- otherwise Just ...
 selectMachines
     :: JobRequest
-    -> JobRequestListenerConnectionHandler [(MachineDescription, Hostname)]
-selectMachines r =
-    (filterMachines (testMachines r) . machines) <$> getConfig
+    -> JobRequestListenerConnectionHandler (Maybe [(MachineDescription, Hostname)])
+selectMachines r = do
+    found <- (filterMachines (testMachines r) . machines) <$> getConfig
+    if length found /= length (testMachines r)
+    then return Nothing
+    else return $ Just found
 
 filterMachines
     :: [MachineDescription]
