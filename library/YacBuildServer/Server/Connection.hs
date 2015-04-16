@@ -33,62 +33,67 @@ handleConnection :: (Socket, SockAddr) -> YBServer ()
 handleConnection x = evalStateT handle' x
   where
     handle' = logConnection
-        >>= readJobRequest
+        >>  readJobRequest
         >>= mkJob
         >>= logJobStart
         >>= distributeJob
         >>= reportJobResult
-        >>= closeConnection
+        >> closeConnection
 
-logConnection :: JobRequestListenerConnectionHandler Socket
+logConnection :: JobRequestListenerConnectionHandler ()
 logConnection = do
-    (x, y) <- get
-    (liftIO . logInfo $ format ("connected: " % shown) y)
-        >> return x
+    x <- snd <$> get
+    void . liftIO . logInfo $ format ("connected: " % shown) x
 
-readJobRequest :: Socket -> JobRequestListenerConnectionHandler (Socket, Maybe JobRequest)
-readJobRequest c = do
+readJobRequest :: JobRequestListenerConnectionHandler (Maybe JobRequest)
+readJobRequest = do
+    c <- fst <$> get
     bytes <- liftIO $ fst3 <$> recvFrom c 1024
     let mjr = readMaybe bytes
     liftIO . whenNothing mjr
         $ logShownPrefix "failed readJobRequest " bytes
-    return $ (c, mjr)
+    return mjr
 
-mkJob :: (Socket, Maybe JobRequest) -> JobRequestListenerConnectionHandler (Socket, Maybe Job)
-mkJob (c, Just x) = do
+mkJob
+    :: Maybe JobRequest
+    -> JobRequestListenerConnectionHandler (Maybe Job)
+mkJob (Just x) = do
     ms   <- selectMachines x
     jid  <- getJobID
     l    <- liftIO $ getJobLogger jid
+    c    <- fst <$> get
 
-    return . (,) c . Just $ Job
+    return . Just $ Job
         { jobLogger = l "master"
         , remoteJobs = (\(m, h) -> mkRemoteJob x (l m) c m h) <$> ms
         , request = x
         , jobConnection = c
         , jobID = jid
         }
-mkJob (x, _) = return $ (x, Nothing)
+mkJob Nothing = return Nothing
 
-logJobStart :: (Socket, Maybe Job) -> JobRequestListenerConnectionHandler (Socket, Maybe Job)
-logJobStart (c, Just j) = do
+logJobStart
+    :: Maybe Job
+    -> JobRequestListenerConnectionHandler (Maybe Job)
+logJobStart (Just j) = do
     t <- liftIO getCurrentTime
     _ <- liftIO . (jobLogger j)
         $ format (shown% " starting job " %shown) t j
-    return (c, Just j)
+    return $ Just j
 logJobStart x = return x
 
 distributeJob
-    :: (Socket, Maybe Job)
-    -> JobRequestListenerConnectionHandler (Socket, Maybe (Job, [JobResult]))
-distributeJob (s, Just x) = do
-    y <- liftIO $ (,) s . Just . (,) x <$> parMapIO runRemoteJob (remoteJobs x)
+    :: Maybe Job
+    -> JobRequestListenerConnectionHandler (Maybe (Job, [JobResult]))
+distributeJob (Just x) = do
+    y <- liftIO $ Just . (,) x <$> parMapIO runRemoteJob (remoteJobs x)
     return y
-distributeJob (x, Nothing) = return (x, Nothing)
+distributeJob Nothing = return Nothing
 
 reportJobResult
-    :: (Socket, Maybe (Job, [JobResult]))
-    -> JobRequestListenerConnectionHandler Socket
-reportJobResult (s, Just (j, xs)) = do
+    :: Maybe (Job, [JobResult])
+    -> JobRequestListenerConnectionHandler ()
+reportJobResult (Just (j, xs)) = do
     let msg = format (
             "\n\n\nJob finished: " %shown% "\n" %
             "Job results: " %shown% "\n" %
@@ -97,18 +102,17 @@ reportJobResult (s, Just (j, xs)) = do
 
     _ <- liftIO $ (jobLogger j) msg
     _ <- liftIO $ (void . send (jobConnection j) . unpack) msg
-    return s
+    return ()
   where
     overall = if all isPassed $ result <$> xs
               then Passed
               else Failed
 
-reportJobResult (s, _) = return s
+reportJobResult Nothing = return ()
 
-closeConnection
-    :: Socket
-    -> JobRequestListenerConnectionHandler ()
-closeConnection c = do
+closeConnection :: JobRequestListenerConnectionHandler ()
+closeConnection = do
+    c <- fst <$> get
     h <- liftIO $ socketToHandle c ReadWriteMode
     _ <- liftIO $ hFlush h
     _ <- liftIO $ hClose h
