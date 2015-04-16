@@ -162,15 +162,20 @@ getJobID = do
         return new
 
 -- | Returns Nothing if all the request machines were not found
--- otherwise Just ...
+-- otherwise removes the taken machines the freeMachines in
+-- YBServerState and returns Just the taken machines
 selectMachines
     :: JobRequest
     -> JobRequestListenerConnectionHandler (Maybe [(MachineDescription, Hostname)])
-selectMachines r = do
-    found <- (filterMachines (testMachines r) . machines) <$> getConfig
-    if length found /= length (testMachines r)
-    then return Nothing
-    else return $ Just found
+selectMachines r = freeMachines <$> getServerState
+    >>= \tms -> liftIO . atomically $ do
+        ms    <- readTVar tms
+        let found = filterMachines (testMachines r) ms
+
+        if length found /= length (testMachines r)
+        then return Nothing
+        else (writeTVar tms . difference ms $ fromList found)
+            >> (return $ Just found)
 
 filterMachines
     :: [MachineDescription]

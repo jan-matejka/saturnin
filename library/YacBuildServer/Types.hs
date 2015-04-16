@@ -22,11 +22,12 @@ module YacBuildServer.Types
     )
 where
 
-import Control.Applicative
+import Control.Applicative  hiding (empty)
 import Control.Concurrent.STM
 import Control.Monad.State
-import Data.Text.Lazy
+import Data.Text.Lazy hiding (empty)
 import Data.Default
+import Data.HashMap.Strict
 import Data.Monoid
 import Formatting
 import Network.Socket
@@ -39,6 +40,8 @@ data BuildRequest = GitBuildRequest
     { brUri   :: String
     , brHead  :: String
     }
+
+type MachinesRegister = HashMap MachineDescription Hostname
 
 -- | JobRequest specifies job to be run. This is what client send to the
 -- job server.
@@ -55,13 +58,17 @@ data TestType = CabalTest | MakeCheckTest
 data YBServerState = YBServerState
     { ybssConfig :: ConfigServer
     , pState :: TVar YBServerPersistentState
+    , freeMachines :: TVar MachinesRegister
     }
 
 -- | Extra function to create default as it needs to run STM
 defaultYBServerState :: IO YBServerState
 defaultYBServerState = do
-    s <- liftIO . atomically $ newTVar def
-    return $ YBServerState def s
+    (s, mr) <- liftIO . atomically $ do
+        x <- newTVar def
+        y <- newTVar empty
+        return (x, y)
+    return $ YBServerState def s mr
 
 type YBServer a = StateT YBServerState IO a
 

@@ -29,6 +29,7 @@ runYBServer = defaultYBServerState >>= evalStateT serve
         ybsCloseStdin
         >> ybsReadConfig
         >>= ybsReadState
+        >>= registerMachines
         >>= ybsCreateWorkdir
         >>= ybsListen
         >>= ybsAccept
@@ -54,6 +55,15 @@ ybsReadState (Just cg) = do
         s <- liftIO . atomically $ newTVar z
         get >>= \t -> put t { pState = s }
     return $ const cg <$> rightToMaybe y
+
+registerMachines
+    :: Maybe ConfigServer
+    -> YBServer (Maybe ConfigServer)
+registerMachines (Just cg) =
+    (freeMachines <$> get)
+        >>= (\tms -> liftIO . atomically . writeTVar tms $ machines cg)
+        >>  return (Just cg)
+registerMachines Nothing = return Nothing
 
 ybsCreateWorkdir :: Maybe ConfigServer -> YBServer (Maybe ConfigServer)
 ybsCreateWorkdir (Just cg) = do
