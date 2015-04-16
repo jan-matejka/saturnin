@@ -16,9 +16,7 @@ import Control.Monad
 import Control.Monad.State
 import Formatting
 import Data.Either.Combinators
-import Data.Monoid
 import Data.Text.Lazy hiding (dropWhileEnd)
-import Network.Socket
 import Prelude hiding (readFile)
 import System.Exit
 import System.IO
@@ -36,14 +34,7 @@ data Job = Job
          { remoteJobs       :: [RemoteJob]
          , request          :: JobRequest
          , jobID            :: JobID
-         }
-
-instance Show Job where
-    show (x @ (Job {})) = "TestJob"
-        <> " { remoteJobs = " <> show (remoteJobs x)
-        <> " , request = " <> show (request x)
-        <> " , jobID = " <> show (jobID x)
-        <> " }"
+         } deriving (Show)
 
 -- | RemoteJob describes a job to be run on one machine. RemoteJob
 -- is always part of Job.
@@ -52,15 +43,7 @@ data RemoteJob = TestJob
          , rJobDataSource   :: GitSource
          , jobMachine       :: MachineDescription
          , jobHost          :: Hostname
-         }
-
-instance Show RemoteJob where
-    show (x @ (TestJob {})) = "TestJob"
-        <> " { rJobTestType = " <> show (rJobTestType x)
-        <> " , rJobDataSource = " <> show (rJobDataSource x)
-        <> " , jobMachine = " <> show (jobMachine x)
-        <> " , jobHost = " <> show (jobHost x)
-        <> " }"
+         } deriving (Show)
 
 mkRemoteJob
     :: JobRequest
