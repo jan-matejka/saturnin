@@ -56,6 +56,7 @@ handleConnection x = evalStateT handle' x
         >>= distributeJob
         >>= returnMachines
         >>= reportJobResult
+        >> reportFreeMachines
         >> closeConnection
         >> logClientDisconnected
 
@@ -172,6 +173,11 @@ getJobID = do
         let new = old { lastJobID = succ $ lastJobID old }
         _ <- writeTVar x new
         return new
+
+reportFreeMachines :: JobRequestListenerConnectionHandler ()
+reportFreeMachines = freeMachines <$> getServerState
+        >>= liftIO . atomically . readTVar
+        >>= lift . logInfo . format ("free machines: "%shown)
 
 -- | Returns Nothing if all the request machines were not found
 -- otherwise removes the taken machines the freeMachines in
