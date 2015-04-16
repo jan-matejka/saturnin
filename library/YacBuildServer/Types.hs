@@ -14,12 +14,14 @@ module YacBuildServer.Types
     , isPassed
     , JobID (..)
     , defaultYBServerState
+    , JobRequestListenerConnectionHandler
     )
 where
 
 import Control.Concurrent.STM
 import Control.Monad.State
 import Data.Default
+import Network.Socket
 
 import YacBuildServer.Git
 import YacBuildServer.Server.Config
@@ -53,6 +55,8 @@ defaultYBServerState = do
     return $ YBServerState def s
 
 type YBServer a = StateT YBServerState IO a
+
+type JobRequestListenerConnectionHandler a = StateT (Socket, SockAddr) (StateT YBServerState IO) a
 
 -- | fst for three-tuple
 fst3 :: forall t t1 t2.  (t, t1, t2) -> t

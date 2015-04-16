@@ -4,30 +4,23 @@ module YacBuildServer.Server
     )
 where
 
-
 import Prelude hiding (lookup, log, readFile)
 
 import Control.Applicative
-import Control.Concurrent.Spawn
 import Control.Concurrent.STM
 import Control.Monad.Catch
 import Control.Monad.State
 import Data.Either.Combinators
-import Data.HashMap.Strict
 import Data.Maybe
-import Data.Text.Lazy hiding (head, all)
-import Data.Time.Clock
 import Formatting hiding (bind)
-import Network.Socket hiding (mkSocket)
+import Network.Socket
 import System.Directory
 import System.IO hiding (readFile)
-import Text.Read hiding (get)
 
-import YacBuildServer.Jobs
 import YacBuildServer.Logging
 import YacBuildServer.Server.Config
+import YacBuildServer.Server.Connection
 import YacBuildServer.Types
-
 
 runYBServer :: IO ()
 runYBServer = defaultYBServerState >>= evalStateT serve
@@ -40,9 +33,6 @@ runYBServer = defaultYBServerState >>= evalStateT serve
         >>= ybsCreateWorkdir
         >>= ybsListen
         >>= ybsAccept
-
-getConfig :: YBServer ConfigServer
-getConfig =  ybssConfig <$> get
 
 ybsCloseStdin :: YBServer ()
 ybsCloseStdin = liftIO $ hClose stdin
@@ -76,7 +66,6 @@ ybsCreateWorkdir (Just cg) = do
     p = "Failed to create working directory"
 ybsCreateWorkdir Nothing = return Nothing
 
-
 ybsListen
     :: (Maybe ConfigServer)
     -> YBServer (Maybe Socket)
@@ -97,122 +86,6 @@ ybsListen (Just cg) = do
     return $ Just sock
 ybsListen Nothing = return Nothing
 
-
 ybsAccept :: Maybe Socket -> YBServer ()
-ybsAccept (Just x) = mapM_ ((ybsHandleConnection =<<) . (liftIO . accept)) $ repeat x
+ybsAccept (Just x) = mapM_ ((handleConnection =<<) . (liftIO . accept)) $ repeat x
 ybsAccept Nothing = return ()
-
-getJobID :: YBServer JobID
-getJobID = do
-    new <- pState <$> get
-        >>= liftIO . atomically . getBumped
-    _ <- liftIO $ writePState new
-    return $ lastJobID new
-  where
-    getBumped :: TVar YBServerPersistentState -> STM (YBServerPersistentState)
-    getBumped x = do
-        old <- readTVar x
-        let new = old { lastJobID = succ $ lastJobID old }
-        _ <- writeTVar x new
-        return new
-
-ybsMkJob :: (Socket, Maybe JobRequest) -> YBServer (Socket, Maybe Job)
-ybsMkJob (c, Just x) = do
-    ms   <- ybsSelectMachines x
-    jid  <- getJobID
-    l    <- liftIO $ getJobLogger jid
-
-    return . (,) c . Just $ Job
-        { jobLogger = l "master"
-        , remoteJobs = (\(m, h) -> mkRemoteJob x (l m) c m h) <$> ms
-        , request = x
-        , jobConnection = c
-        , jobID = jid
-        }
-ybsMkJob (x, _) = return $ (x, Nothing)
-
-whenNothing :: Applicative m => Maybe a -> m () -> m ()
-whenNothing (Just _) _ = pure ()
-whenNothing Nothing f = f
-
-ybsReadJobRequest :: Socket -> YBServer (Socket, Maybe JobRequest)
-ybsReadJobRequest c = do
-    bytes <- liftIO $ fst3 <$> recvFrom c 1024
-    let mjr = readMaybe bytes
-    liftIO . whenNothing mjr
-        $ logShownPrefix "failed readJobRequest " bytes
-    return $ (c, mjr)
-
-logConnection :: (Socket, SockAddr) -> YBServer Socket
-logConnection (x, y) =
-    (liftIO . logInfo $ format ("connected: " % shown) y)
-        >> return x
-
-ybsHandleConnection :: (Socket, SockAddr) -> YBServer ()
-ybsHandleConnection x =
-    logConnection x
-        >>= ybsReadJobRequest
-        >>= ybsMkJob
-        >>= logJobStart
-        >>= ybsDistributeJob
-        >>= reportJobResult
-        >>= closeConnection
-
-logJobStart :: (Socket, Maybe Job) -> YBServer (Socket, Maybe Job)
-logJobStart (c, Just j) = do
-    t <- liftIO getCurrentTime
-    _ <- liftIO . (jobLogger j)
-        $ format (shown% " starting job " %shown) t j
-    return (c, Just j)
-logJobStart x = return x
-
-ybsDistributeJob
-    :: (Socket, Maybe Job)
-    -> YBServer (Socket, Maybe (Job, [JobResult]))
-ybsDistributeJob (s, Just x) = do
-    y <- liftIO $ (,) s . Just . (,) x <$> parMapIO runRemoteJob (remoteJobs x)
-    return y
-ybsDistributeJob (x, Nothing) = return (x, Nothing)
-
-reportJobResult
-    :: (Socket, Maybe (Job, [JobResult]))
-    -> YBServer Socket
-reportJobResult (s, Just (j, xs)) = do
-    let msg = format (
-            "\n\n\nJob finished: " %shown% "\n" %
-            "Job results: " %shown% "\n" %
-            "Overal result: " %shown% "\n"
-            ) (request j) xs overall
-
-    _ <- liftIO $ (jobLogger j) msg
-    _ <- liftIO $ (void . send (jobConnection j) . unpack) msg
-    return s
-  where
-    overall = if all isPassed $ result <$> xs
-              then Passed
-              else Failed
-
-reportJobResult (s, _) = return s
-
--- | FIXME: Unhandled failure:
--- when not all requested machines are available
-ybsSelectMachines
-    :: JobRequest
-    -> YBServer [(MachineDescription, Hostname)]
-ybsSelectMachines r =
-    (filterMachines (testMachines r) . machines) <$> getConfig
-
-closeConnection
-    :: Socket
-    -> YBServer ()
-closeConnection c = do
-    h <- liftIO $ socketToHandle c ReadWriteMode
-    _ <- liftIO $ hFlush h
-    _ <- liftIO $ hClose h
-    return ()
-
-filterMachines
-    :: [MachineDescription]
-    -> HashMap MachineDescription Hostname
-    -> [(MachineDescription, Hostname)]
-filterMachines ss xs = toList $ filterWithKey (\k _ -> elem k ss) xs
