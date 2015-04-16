@@ -4,8 +4,7 @@ module YacBuildServer.Logging
     , logInfo
     , logShown
     , logShownPrefix
-    , jobLogPath
-    , jobLog
+    , getJobLogger
     , Logger
     , DistributedJobLogger
     , Message
@@ -13,14 +12,11 @@ module YacBuildServer.Logging
 where
 
 import Formatting
-import Data.Char
 import Data.Monoid
 import Data.Text.Lazy
-import Data.Time.Clock
-import Data.Time.Format
+import System.Directory
 import System.FilePath.Posix
 import System.IO
-import System.Locale
 
 import YacBuildServer.Types
 
@@ -61,28 +57,18 @@ logShownPrefix p x = logError $ format (text % shown) p x
 jobLogs :: FilePath
 jobLogs = "/var/lib/ybs/job-logs"
 
-jobLogPath :: JobRequest -> IO FilePath
-jobLogPath r = do
-    t <- getCurrentTime
-    return
-        $   jobLogs
-        </> dirname
-        </> fmt t
-  where
-    fmt = formatTime defaultTimeLocale "%F.%T.%Z"
-
-    dirname :: String
-    dirname = san $ show r
-
-    san :: String -> String
-    san = fmap (\x -> if isAlphaNum x then x else '_')
-
 jobLog
     :: FilePath -- jobs base logging path
     -> MachineDescription
     -> Message
     -> IO ()
 jobLog p m msg = appendFile (p </> (m <> ".txt")) $ unpack msg
+
+getJobLogger :: JobID -> IO DistributedJobLogger
+getJobLogger (JobID x) = do
+    let p = jobLogs </> (show x)
+    _   <- createDirectoryIfMissing True p
+    return $ jobLog p
 
 type Logger = Text -> IO ()
 type DistributedJobLogger = FilePath -> Text -> IO ()

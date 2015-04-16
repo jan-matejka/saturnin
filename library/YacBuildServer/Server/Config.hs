@@ -4,6 +4,9 @@ module YacBuildServer.Server.Config
     , readConfig
     , MachineDescription
     , Hostname
+    , YBServerPersistentState (..)
+    , readPState
+    , JobID (..)
     )
 where
 
@@ -44,3 +47,31 @@ readConfig = do
     defWorkDir t (cg @ ConfigServer { work_dir = Nothing }) =
         cg { work_dir = Just $ t </> "ybs" }
     defWorkDir _ cg = cg
+
+
+data JobID = JobID Int
+    deriving (Show, Read, Generic)
+
+instance Enum JobID where
+    toEnum x = JobID x
+    fromEnum (JobID x) = x
+
+instance FromJSON JobID
+
+data YBServerPersistentState = YBServerPersistentState
+                             { lastJobID :: JobID }
+    deriving (Show, Read, Generic)
+
+instance FromJSON YBServerPersistentState
+
+instance Default YBServerPersistentState where
+    def = YBServerPersistentState $ JobID 0
+
+readPState :: IO (Either ParseException YBServerPersistentState)
+readPState = do
+    x <- doesFileExist fp
+    if x
+    then decodeFileEither fp
+    else return $ Right def
+  where
+    fp = "/var/lib/ybs/state"

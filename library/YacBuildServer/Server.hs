@@ -9,13 +9,14 @@ import Prelude hiding (lookup, log, readFile)
 
 import Control.Applicative
 import Control.Concurrent.Spawn
+import Control.Concurrent.STM
 import Control.Monad.Catch
 import Control.Monad.State
 import Data.Either.Combinators
-import Data.Default
 import Data.HashMap.Strict
 import Data.Maybe
 import Data.Text.Lazy hiding (head, all)
+import Data.Time.Clock
 import Formatting hiding (bind)
 import Network.Socket hiding (mkSocket)
 import System.Directory
@@ -29,12 +30,13 @@ import YacBuildServer.Types
 
 
 runYBServer :: IO ()
-runYBServer = evalStateT serve def
+runYBServer = defaultYBServerState >>= evalStateT serve
   where
     serve :: YBServer ()
     serve =
         ybsCloseStdin
         >> ybsReadConfig
+        >>= ybsReadState
         >>= ybsCreateWorkdir
         >>= ybsListen
         >>= ybsAccept
@@ -42,10 +44,8 @@ runYBServer = evalStateT serve def
 getConfig :: YBServer ConfigServer
 getConfig =  ybssConfig <$> get
 
-
 ybsCloseStdin :: YBServer ()
 ybsCloseStdin = liftIO $ hClose stdin
-
 
 ybsReadConfig :: YBServer (Maybe ConfigServer)
 ybsReadConfig = do
@@ -54,6 +54,17 @@ ybsReadConfig = do
     whenRight x $ \z -> get >>= \y -> put y { ybssConfig = z }
     return $ rightToMaybe x
 
+ybsReadState
+    :: Maybe ConfigServer
+    -> YBServer (Maybe ConfigServer)
+ybsReadState Nothing = return Nothing
+ybsReadState (Just cg) = do
+    y <- liftIO readPState
+    whenLeft  y $ liftIO . logShown
+    whenRight y $ \z -> do
+        s <- liftIO . atomically $ newTVar z
+        get >>= \t -> put t { pState = s }
+    return $ const cg <$> rightToMaybe y
 
 ybsCreateWorkdir :: Maybe ConfigServer -> YBServer (Maybe ConfigServer)
 ybsCreateWorkdir (Just cg) = do
@@ -91,16 +102,29 @@ ybsAccept :: Maybe Socket -> YBServer ()
 ybsAccept (Just x) = mapM_ ((ybsHandleConnection =<<) . (liftIO . accept)) $ repeat x
 ybsAccept Nothing = return ()
 
+getJobID :: YBServer JobID
+getJobID = pState <$> get
+    >>= liftIO . atomically . getBumpedJobID
+  where
+    getBumpedJobID :: TVar YBServerPersistentState -> STM (JobID)
+    getBumpedJobID x = do
+        s <- readTVar x
+        let jid = succ $ lastJobID s
+        _ <- writeTVar x $ s { lastJobID = jid }
+        return jid
+
 ybsMkJob :: (Socket, Maybe JobRequest) -> YBServer (Socket, Maybe Job)
 ybsMkJob (c, Just x) = do
     ms   <- ybsSelectMachines x
-    l <- getLogger x
+    jid  <- getJobID
+    l    <- liftIO $ getJobLogger jid
 
     return . (,) c . Just $ Job
         { jobLogger = l "master"
         , remoteJobs = (\(m, h) -> mkRemoteJob x (l m) c m h) <$> ms
         , request = x
         , jobConnection = c
+        , jobID = jid
         }
 ybsMkJob (x, _) = return $ (x, Nothing)
 
@@ -126,9 +150,18 @@ ybsHandleConnection x =
     logConnection x
         >>= ybsReadJobRequest
         >>= ybsMkJob
+        >>= logJobStart
         >>= ybsDistributeJob
         >>= reportJobResult
         >>= closeConnection
+
+logJobStart :: (Socket, Maybe Job) -> YBServer (Socket, Maybe Job)
+logJobStart (c, Just j) = do
+    t <- liftIO getCurrentTime
+    _ <- liftIO . (jobLogger j)
+        $ format (shown% " starting job " %shown) t j
+    return (c, Just j)
+logJobStart x = return x
 
 ybsDistributeJob
     :: (Socket, Maybe Job)
@@ -174,12 +207,6 @@ closeConnection c = do
     _ <- liftIO $ hFlush h
     _ <- liftIO $ hClose h
     return ()
-
-getLogger :: JobRequest -> YBServer DistributedJobLogger
-getLogger r = do
-    jlp <- liftIO $ jobLogPath r
-    _   <- liftIO $ createDirectoryIfMissing True jlp
-    return $ jobLog jlp
 
 filterMachines
     :: [MachineDescription]

@@ -12,9 +12,12 @@ module YacBuildServer.Types
     , TestResult (..)
     , anyEither
     , isPassed
+    , JobID (..)
+    , defaultYBServerState
     )
 where
 
+import Control.Concurrent.STM
 import Control.Monad.State
 import Data.Default
 
@@ -40,18 +43,20 @@ data TestType = CabalTest | MakeCheckTest
 
 data YBServerState = YBServerState
     { ybssConfig :: ConfigServer
+    , pState :: TVar YBServerPersistentState
     }
 
-instance Default YBServerState where
-    def = YBServerState def
+-- | Extra function to create default as it needs to run STM
+defaultYBServerState :: IO YBServerState
+defaultYBServerState = do
+    s <- liftIO . atomically $ newTVar def
+    return $ YBServerState def s
 
 type YBServer a = StateT YBServerState IO a
-
 
 -- | fst for three-tuple
 fst3 :: forall t t1 t2.  (t, t1, t2) -> t
 fst3 (x, _, _) = x
-
 
 data TestResult = Passed | Failed | FailedSetup
     deriving (Show, Read)
