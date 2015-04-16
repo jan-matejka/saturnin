@@ -1,4 +1,4 @@
-{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE RankNTypes, OverloadedStrings #-}
 module YacBuildServer.Types
     ( MachineDescription
     , Hostname
@@ -15,15 +15,19 @@ module YacBuildServer.Types
     , JobID (..)
     , defaultYBServerState
     , JobRequestListenerConnectionHandler
+    , logError
+    , logInfo
     )
 where
 
 import Control.Concurrent.STM
 import Control.Monad.State
+import Data.Text.Lazy
 import Data.Default
 import Network.Socket
 
 import YacBuildServer.Git
+import YacBuildServer.Logging
 import YacBuildServer.Server.Config
 
 data BuildRequest = GitBuildRequest
@@ -55,6 +59,12 @@ defaultYBServerState = do
     return $ YBServerState def s
 
 type YBServer a = StateT YBServerState IO a
+
+logError :: Text -> YBServer ()
+logError = liftIO . logServer . append "error: "
+
+logInfo :: Text -> YBServer ()
+logInfo = liftIO . logServer . append "info: "
 
 type JobRequestListenerConnectionHandler a = StateT (Socket, SockAddr) (StateT YBServerState IO) a
 

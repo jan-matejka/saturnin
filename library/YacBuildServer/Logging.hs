@@ -1,66 +1,36 @@
 {-# LANGUAGE OverloadedStrings #-}
 module YacBuildServer.Logging
-    ( logError
-    , logInfo
-    , logShown
-    , logShownPrefix
-    , getJobLogger
+    ( getJobLogger
     , Logger
     , DistributedJobLogger
-    , Message
+    , logServer
     )
 where
 
-import Formatting
 import Data.Monoid
 import Data.Text.Lazy
 import System.Directory
 import System.FilePath.Posix
 import System.IO
 
-import YacBuildServer.Types
+import YacBuildServer.Server.Config
 
 serverLog :: FilePath
 serverLog = "/var/log/ybs.log"
 
-_log :: String -> IO ()
-_log = appendFile serverLog
-
-type Level   = Text
-type Message = Text
-
-_msg :: Level -> Message -> String
-_msg l m = unpack $ format (text % ": " % text % "\n") l m
-
-logError :: Text -> IO ()
-logError x = do
-    _log   m
-    logStd m
-  where
-    m = _msg "error" x
-    logStd = hPutStr stderr
-
-logInfo :: Text -> IO ()
-logInfo x = do
-    _log   m
-    logStd m
-  where
-    m = _msg "info" x
-    logStd = putStr
-
-logShown :: Show x => x -> IO ()
-logShown = logError . format shown
-
-logShownPrefix :: Show x => Text -> x -> IO ()
-logShownPrefix p x = logError $ format (text % shown) p x
-
 jobLogs :: FilePath
 jobLogs = "/var/lib/ybs/job-logs"
 
+logServer :: Text -> IO ()
+logServer x = logToLog x >> logToStdout x
+  where
+    logToLog = appendFile serverLog . unpack
+    logToStdout = hPutStr stderr . unpack
+
 jobLog
-    :: FilePath -- jobs base logging path
+    :: FilePath -- job's base logging path
     -> MachineDescription
-    -> Message
+    -> Text
     -> IO ()
 jobLog p m msg = appendFile (p </> (m <> ".txt")) $ unpack msg
 

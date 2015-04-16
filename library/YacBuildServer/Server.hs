@@ -17,7 +17,6 @@ import Network.Socket
 import System.Directory
 import System.IO hiding (readFile)
 
-import YacBuildServer.Logging
 import YacBuildServer.Server.Config
 import YacBuildServer.Server.Connection
 import YacBuildServer.Types
@@ -40,7 +39,7 @@ ybsCloseStdin = liftIO $ hClose stdin
 ybsReadConfig :: YBServer (Maybe ConfigServer)
 ybsReadConfig = do
     x <- liftIO readConfig
-    whenLeft  x $ liftIO . logShown
+    whenLeft  x $ logError . format shown
     whenRight x $ \z -> get >>= \y -> put y { ybssConfig = z }
     return $ rightToMaybe x
 
@@ -50,7 +49,7 @@ ybsReadState
 ybsReadState Nothing = return Nothing
 ybsReadState (Just cg) = do
     y <- liftIO readPState
-    whenLeft  y $ liftIO . logShown
+    whenLeft  y $ logError . format shown
     whenRight y $ \z -> do
         s <- liftIO . atomically $ newTVar z
         get >>= \t -> put t { pState = s }
@@ -60,7 +59,7 @@ ybsCreateWorkdir :: Maybe ConfigServer -> YBServer (Maybe ConfigServer)
 ybsCreateWorkdir (Just cg) = do
     catch
         (liftIO . createDirectoryIfMissing True . fromJust $ work_dir cg)
-        (liftIO . logShownPrefix p :: SomeException -> YBServer ())
+        (logError . format (text % shown) p :: SomeException -> YBServer ())
     return $ Just cg
   where
     p = "Failed to create working directory"
@@ -80,7 +79,7 @@ ybsListen (Just cg) = do
     sock <- liftIO $ socket (addrFamily addr) Stream defaultProtocol
     _ <- liftIO . bind sock $ addrAddress addr
 
-    liftIO . logInfo $ format ("Listening on " % shown) addr
+    logInfo $ format ("Listening on " % shown) addr
     _ <- liftIO $ listen sock 5
 
     return $ Just sock

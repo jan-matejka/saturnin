@@ -29,6 +29,20 @@ getServerState = lift get
 getConfig :: JobRequestListenerConnectionHandler ConfigServer
 getConfig = ybssConfig <$> getServerState
 
+readBytes :: JobRequestListenerConnectionHandler String
+readBytes = (\x -> liftIO $ fst3 <$> recvFrom x 1024) =<< (fst <$> get)
+
+-- | Log to both log file and the client connection
+logBoth :: Job -> Text -> JobRequestListenerConnectionHandler ()
+logBoth j x = logToConnection x >> (liftIO $ (jobLogger j) x)
+
+-- | Log to both server stderr and client connection
+logToServerAndConn :: Text -> JobRequestListenerConnectionHandler ()
+logToServerAndConn x = logToConnection x >> (lift $ logInfo x)
+
+logToConnection :: Text -> JobRequestListenerConnectionHandler ()
+logToConnection x = (\y -> liftIO . void . send y $ unpack x) =<< (fst <$> get)
+
 handleConnection :: (Socket, SockAddr) -> YBServer ()
 handleConnection x = evalStateT handle' x
   where
@@ -41,17 +55,15 @@ handleConnection x = evalStateT handle' x
         >> closeConnection
 
 logConnection :: JobRequestListenerConnectionHandler ()
-logConnection = do
-    x <- snd <$> get
-    void . liftIO . logInfo $ format ("connected: " % shown) x
+logConnection = snd <$> get
+    >>= lift . logInfo . format ("connected: " % shown)
 
 readJobRequest :: JobRequestListenerConnectionHandler (Maybe JobRequest)
 readJobRequest = do
-    c <- fst <$> get
-    bytes <- liftIO $ fst3 <$> recvFrom c 1024
+    bytes <- readBytes
     let mjr = readMaybe bytes
-    liftIO . whenNothing mjr
-        $ logShownPrefix "failed readJobRequest " bytes
+    whenNothing mjr . logToServerAndConn
+        $ format ("failed to read JobRequest: " % shown) bytes
     return mjr
 
 mkJob
@@ -77,8 +89,7 @@ logJobStart
     -> JobRequestListenerConnectionHandler (Maybe Job)
 logJobStart (Just j) = do
     t <- liftIO getCurrentTime
-    _ <- liftIO . (jobLogger j)
-        $ format (shown% " starting job " %shown) t j
+    logBoth j $ format (shown% " starting job " %shown) t j
     return $ Just j
 logJobStart x = return x
 
@@ -94,15 +105,11 @@ reportJobResult
     :: Maybe (Job, [JobResult])
     -> JobRequestListenerConnectionHandler ()
 reportJobResult (Just (j, xs)) = do
-    let msg = format (
-            "\n\n\nJob finished: " %shown% "\n" %
-            "Job results: " %shown% "\n" %
-            "Overal result: " %shown% "\n"
-            ) (request j) xs overall
-
-    _ <- liftIO $ (jobLogger j) msg
-    _ <- liftIO $ (void . send (jobConnection j) . unpack) msg
-    return ()
+    logBoth j $ format (
+        "\n\n\nJob finished: " %shown% "\n" %
+        "Job results: " %shown% "\n" %
+        "Overal result: " %shown% "\n"
+        ) (request j) xs overall
   where
     overall = if all isPassed $ result <$> xs
               then Passed
