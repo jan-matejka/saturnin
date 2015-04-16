@@ -1,4 +1,4 @@
-{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE RankNTypes, OverloadedStrings #-}
 module YacBuildServer.Types
     ( MachineDescription
     , Hostname
@@ -14,14 +14,25 @@ module YacBuildServer.Types
     , isPassed
     , JobID (..)
     , defaultYBServerState
+    , JobRequestListenerConnectionHandler
+    , logError
+    , logInfo
+    , logToConnection
+    , logToConnection'
     )
 where
 
+import Control.Applicative
 import Control.Concurrent.STM
 import Control.Monad.State
+import Data.Text.Lazy
 import Data.Default
+import Data.Monoid
+import Formatting
+import Network.Socket
 
 import YacBuildServer.Git
+import YacBuildServer.Logging
 import YacBuildServer.Server.Config
 
 data BuildRequest = GitBuildRequest
@@ -53,6 +64,24 @@ defaultYBServerState = do
     return $ YBServerState def s
 
 type YBServer a = StateT YBServerState IO a
+
+logError :: Text -> YBServer ()
+logError = liftIO . logServer . format ("error: " % text % "\n")
+
+logInfo :: Text -> YBServer ()
+logInfo = liftIO . logServer . format ("info: " % text % "\n")
+
+type JobRequestListenerConnectionHandler a =
+    StateT (Socket, SockAddr) (StateT YBServerState IO) a
+
+logToConnection :: Text -> JobRequestListenerConnectionHandler ()
+logToConnection x = do
+    c <- (fst <$> get)
+    liftIO $ logToConnection' c x
+
+logToConnection' :: Socket -> Text -> IO ()
+logToConnection' c x =
+    void . send c $ unpack x <> "\n"
 
 -- | fst for three-tuple
 fst3 :: forall t t1 t2.  (t, t1, t2) -> t

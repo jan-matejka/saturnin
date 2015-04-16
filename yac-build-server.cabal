@@ -36,6 +36,7 @@ library
         , YacBuildServer.Jobs
         , YacBuildServer.Server
         , YacBuildServer.Server.Config
+        , YacBuildServer.Server.Connection
         , YacBuildServer.Logging
         , YacBuildServer.Types
     ghc-options:
