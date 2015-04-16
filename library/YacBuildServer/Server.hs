@@ -42,7 +42,10 @@ ybsReadConfig :: YBServer (Maybe ConfigServer)
 ybsReadConfig = do
     x <- liftIO readConfig
     whenLeft  x $ logError . format shown
-    whenRight x $ \z -> get >>= \y -> put y { ybssConfig = z }
+    whenRight x $ \z -> get >>= \ts -> do
+        liftIO . atomically $ do
+            yss <- readTVar ts
+            writeTVar ts $ yss { ybssConfig = z }
     return $ rightToMaybe x
 
 ybsReadState
@@ -54,16 +57,19 @@ ybsReadState (Just cg) = do
     whenLeft  y $ logError . format shown
     whenRight y $ \z -> do
         s <- liftIO . atomically $ newTVar z
-        get >>= \t -> put t { pState = s }
+        get >>= \ts -> liftIO . atomically $ do
+            yss <- readTVar ts
+            writeTVar ts $ yss { pState = s }
     return $ const cg <$> rightToMaybe y
 
 registerMachines
     :: Maybe ConfigServer
     -> YBServer (Maybe ConfigServer)
-registerMachines (Just cg) =
-    (freeMachines <$> get)
-        >>= (\tms -> liftIO . atomically . writeTVar tms $ machines cg)
-        >>  return (Just cg)
+registerMachines (Just cg) = do
+    ts <- get
+    liftIO . atomically $ freeMachines <$> readTVar ts
+        >>= (\tms -> writeTVar tms $ machines cg)
+    return (Just cg)
 registerMachines Nothing = return Nothing
 
 ybsCreateWorkdir :: Maybe ConfigServer -> YBServer (Maybe ConfigServer)
@@ -97,8 +103,9 @@ ybsListen (Just cg) = do
 ybsListen Nothing = return Nothing
 
 ybsAccept :: Maybe Socket -> YBServer ()
-ybsAccept (Just x) =
+ybsAccept (Just x) = do
+    ts <- get
     forever $ do
         c <- liftIO $ accept x
-        get >>= void . liftIO . forkIO . evalStateT (handleConnection c)
+        void . liftIO . forkIO $ evalStateT (handleConnection c) ts
 ybsAccept Nothing = return ()

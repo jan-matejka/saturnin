@@ -62,15 +62,15 @@ data YBServerState = YBServerState
     }
 
 -- | Extra function to create default as it needs to run STM
-defaultYBServerState :: IO YBServerState
-defaultYBServerState = do
-    (s, mr) <- liftIO . atomically $ do
+defaultYBServerState :: IO (TVar YBServerState)
+defaultYBServerState =
+    liftIO . atomically $ do
         x <- newTVar def
         y <- newTVar empty
-        return (x, y)
-    return $ YBServerState def s mr
+        z <- newTVar $ YBServerState def x y
+        return z
 
-type YBServer a = StateT YBServerState IO a
+type YBServer a = StateT (TVar YBServerState) IO a
 
 logError :: Text -> YBServer ()
 logError = liftIO . logServer . format ("error: " % text % "\n")
@@ -79,7 +79,7 @@ logInfo :: Text -> YBServer ()
 logInfo = liftIO . logServer . format ("info: " % text % "\n")
 
 type JobRequestListenerConnectionHandler a =
-    StateT (Socket, SockAddr) (StateT YBServerState IO) a
+    StateT (Socket, SockAddr) (StateT (TVar YBServerState) IO) a
 
 logToConnection :: Text -> JobRequestListenerConnectionHandler ()
 logToConnection x = do

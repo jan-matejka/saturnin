@@ -24,8 +24,8 @@ import YacBuildServer.Logging
 import YacBuildServer.Server.Config
 import YacBuildServer.Types
 
-getServerState :: JobRequestListenerConnectionHandler YBServerState
-getServerState = lift get
+-- getServerState :: JobRequestListenerConnectionHandler YBServerState
+-- getServerState = lift get
 
 --getConfig :: JobRequestListenerConnectionHandler ConfigServer
 --getConfig = ybssConfig <$> getServerState
@@ -128,12 +128,14 @@ distributeJob Nothing = return Nothing
 returnMachines
     :: Maybe (Job, [JobResult])
     -> JobRequestListenerConnectionHandler (Maybe (Job, [JobResult]))
-returnMachines (x @ (Just (j, _))) = freeMachines <$> getServerState
-    >>= \tms -> liftIO . atomically $ do
+returnMachines (x @ (Just (j, _))) = do
+    ts <- lift get
+    liftIO . atomically $ do
+        tms <- freeMachines <$> readTVar ts
         old <- readTVar tms
         let returning = fromList $ (jobMachine &&& jobHost) <$> remoteJobs j
-        _ <- writeTVar tms $ union old returning
-        return x
+        writeTVar tms $ union old returning
+    return x
 returnMachines Nothing = return Nothing
 
 reportJobResult
@@ -162,8 +164,8 @@ closeConnection = do
 
 getJobID :: JobRequestListenerConnectionHandler JobID
 getJobID = do
-    new <- pState <$> getServerState
-        >>= liftIO . atomically . getBumped
+    ts <- lift get
+    new <- liftIO . atomically $ pState <$> readTVar ts >>= getBumped
     _ <- liftIO $ writePState new
     return $ lastJobID new
   where
@@ -175,9 +177,11 @@ getJobID = do
         return new
 
 reportFreeMachines :: JobRequestListenerConnectionHandler ()
-reportFreeMachines = freeMachines <$> getServerState
-        >>= liftIO . atomically . readTVar
-        >>= lift . logInfo . format ("free machines: "%shown)
+reportFreeMachines = do
+    ts <- lift get
+    liftIO . atomically $ freeMachines <$> readTVar ts
+        >>= readTVar
+    >>= lift . logInfo . format ("free machines: "%shown)
 
 -- | Returns Nothing if all the request machines were not found
 -- otherwise removes the taken machines the freeMachines in
@@ -185,15 +189,17 @@ reportFreeMachines = freeMachines <$> getServerState
 selectMachines
     :: JobRequest
     -> JobRequestListenerConnectionHandler (Maybe [(MachineDescription, Hostname)])
-selectMachines r = freeMachines <$> getServerState
-    >>= \tms -> liftIO . atomically $ do
-        ms    <- readTVar tms
-        let found = filterMachines (testMachines r) ms
+selectMachines r = do
+    ts <- lift get
+    liftIO . atomically $ freeMachines <$> readTVar ts
+        >>= \tms -> do
+            ms <- readTVar tms
+            let found = filterMachines (testMachines r) ms
 
-        if length found /= length (testMachines r)
-        then return Nothing
-        else (writeTVar tms . difference ms $ fromList found)
-            >> (return $ Just found)
+            if length found /= length (testMachines r)
+            then return Nothing
+            else (writeTVar tms . difference ms $ fromList found)
+                >> (return $ Just found)
 
 filterMachines
     :: [MachineDescription]
