@@ -7,6 +7,7 @@ where
 import Prelude hiding (lookup, log, readFile)
 
 import Control.Applicative
+import Control.Arrow
 import Control.Concurrent.Spawn
 import Control.Concurrent.STM
 import Control.Monad.State
@@ -53,6 +54,7 @@ handleConnection x = evalStateT handle' x
         >>= mkJob
         >>= logJobStart
         >>= distributeJob
+        >>= returnMachines
         >>= reportJobResult
         >> closeConnection
         >> logClientDisconnected
@@ -122,6 +124,17 @@ distributeJob (Just x) = do
         (\y -> RemoteJobRunnerState y (l $ jobMachine y) cL) <$> (remoteJobs j)
 
 distributeJob Nothing = return Nothing
+
+returnMachines
+    :: Maybe (Job, [JobResult])
+    -> JobRequestListenerConnectionHandler (Maybe (Job, [JobResult]))
+returnMachines (x @ (Just (j, _))) = freeMachines <$> getServerState
+    >>= \tms -> liftIO . atomically $ do
+        old <- readTVar tms
+        let returning = fromList $ (jobMachine &&& jobHost) <$> remoteJobs j
+        _ <- writeTVar tms $ union old returning
+        return x
+returnMachines Nothing = return Nothing
 
 reportJobResult
     :: Maybe (Job, [JobResult])
