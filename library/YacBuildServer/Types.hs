@@ -24,6 +24,7 @@ import Control.Concurrent.STM
 import Control.Monad.State
 import Data.Text.Lazy
 import Data.Default
+import Formatting
 import Network.Socket
 
 import YacBuildServer.Git
@@ -61,10 +62,10 @@ defaultYBServerState = do
 type YBServer a = StateT YBServerState IO a
 
 logError :: Text -> YBServer ()
-logError = liftIO . logServer . append "error: "
+logError = liftIO . logServer . format ("error: " % text % "\n")
 
 logInfo :: Text -> YBServer ()
-logInfo = liftIO . logServer . append "info: "
+logInfo = liftIO . logServer . format ("info: " % text % "\n")
 
 type JobRequestListenerConnectionHandler a = StateT (Socket, SockAddr) (StateT YBServerState IO) a
 

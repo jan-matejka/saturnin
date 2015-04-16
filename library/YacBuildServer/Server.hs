@@ -12,7 +12,7 @@ import Control.Monad.Catch
 import Control.Monad.State
 import Data.Either.Combinators
 import Data.Maybe
-import Formatting hiding (bind)
+import Formatting (format, shown, text, (%))
 import Network.Socket
 import System.Directory
 import System.IO hiding (readFile)

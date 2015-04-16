@@ -11,9 +11,10 @@ import Control.Concurrent.Spawn
 import Control.Concurrent.STM
 import Control.Monad.State
 import Data.HashMap.Strict
+import Data.Monoid
 import Data.Text.Lazy hiding (head, all)
 import Data.Time.Clock
-import Formatting hiding (bind)
+import Formatting
 import Network.Socket
 import System.IO hiding (readFile)
 import Text.Read hiding (get, lift)
@@ -41,22 +42,33 @@ logToServerAndConn :: Text -> JobRequestListenerConnectionHandler ()
 logToServerAndConn x = logToConnection x >> (lift $ logInfo x)
 
 logToConnection :: Text -> JobRequestListenerConnectionHandler ()
-logToConnection x = (\y -> liftIO . void . send y $ unpack x) =<< (fst <$> get)
+logToConnection x = do
+    c <- (fst <$> get)
+    liftIO . void . send c $ unpack x <> "\n"
 
 handleConnection :: (Socket, SockAddr) -> YBServer ()
 handleConnection x = evalStateT handle' x
   where
-    handle' = logConnection
+    handle' = logClientConnected
         >>  readJobRequest
         >>= mkJob
         >>= logJobStart
         >>= distributeJob
         >>= reportJobResult
         >> closeConnection
+        >> logClientDisconnected
 
-logConnection :: JobRequestListenerConnectionHandler ()
-logConnection = snd <$> get
-    >>= lift . logInfo . format ("connected: " % shown)
+logClientConnected :: JobRequestListenerConnectionHandler ()
+logClientConnected = do
+    addr <- snd <$> get
+    t    <- liftIO getCurrentTime
+    lift . logInfo $ format (shown % " connected: " % shown) t addr
+
+logClientDisconnected :: JobRequestListenerConnectionHandler ()
+logClientDisconnected =  do
+    addr <- snd <$> get
+    t    <- liftIO getCurrentTime
+    lift . logInfo $ format (shown % " disconnected: " % shown) t addr
 
 readJobRequest :: JobRequestListenerConnectionHandler (Maybe JobRequest)
 readJobRequest = do
