@@ -103,15 +103,18 @@ ybsAccept (Just x) = mapM_ ((ybsHandleConnection =<<) . (liftIO . accept)) $ rep
 ybsAccept Nothing = return ()
 
 getJobID :: YBServer JobID
-getJobID = pState <$> get
-    >>= liftIO . atomically . getBumpedJobID
+getJobID = do
+    new <- pState <$> get
+        >>= liftIO . atomically . getBumped
+    _ <- liftIO $ writePState new
+    return $ lastJobID new
   where
-    getBumpedJobID :: TVar YBServerPersistentState -> STM (JobID)
-    getBumpedJobID x = do
-        s <- readTVar x
-        let jid = succ $ lastJobID s
-        _ <- writeTVar x $ s { lastJobID = jid }
-        return jid
+    getBumped :: TVar YBServerPersistentState -> STM (YBServerPersistentState)
+    getBumped x = do
+        old <- readTVar x
+        let new = old { lastJobID = succ $ lastJobID old }
+        _ <- writeTVar x new
+        return new
 
 ybsMkJob :: (Socket, Maybe JobRequest) -> YBServer (Socket, Maybe Job)
 ybsMkJob (c, Just x) = do

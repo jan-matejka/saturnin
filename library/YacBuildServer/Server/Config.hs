@@ -6,6 +6,7 @@ module YacBuildServer.Server.Config
     , Hostname
     , YBServerPersistentState (..)
     , readPState
+    , writePState
     , JobID (..)
     )
 where
@@ -57,21 +58,27 @@ instance Enum JobID where
     fromEnum (JobID x) = x
 
 instance FromJSON JobID
+instance ToJSON JobID
 
 data YBServerPersistentState = YBServerPersistentState
                              { lastJobID :: JobID }
     deriving (Show, Read, Generic)
 
 instance FromJSON YBServerPersistentState
+instance ToJSON YBServerPersistentState
 
 instance Default YBServerPersistentState where
     def = YBServerPersistentState $ JobID 0
 
 readPState :: IO (Either ParseException YBServerPersistentState)
 readPState = do
-    x <- doesFileExist fp
+    x <- doesFileExist pstatePath
     if x
-    then decodeFileEither fp
+    then decodeFileEither pstatePath
     else return $ Right def
-  where
-    fp = "/var/lib/ybs/state"
+
+writePState :: YBServerPersistentState -> IO ()
+writePState = encodeFile pstatePath
+
+pstatePath :: FilePath
+pstatePath = "/var/lib/ybs/state"
