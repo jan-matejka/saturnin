@@ -27,8 +27,8 @@ import YacBuildServer.Types
 getServerState :: JobRequestListenerConnectionHandler YBServerState
 getServerState = lift get
 
-getConfig :: JobRequestListenerConnectionHandler ConfigServer
-getConfig = ybssConfig <$> getServerState
+--getConfig :: JobRequestListenerConnectionHandler ConfigServer
+--getConfig = ybssConfig <$> getServerState
 
 readBytes :: JobRequestListenerConnectionHandler String
 readBytes = (\x -> liftIO $ fst3 <$> recvFrom x 1024) =<< (fst <$> get)
@@ -120,7 +120,6 @@ distributeJob (Just x) = do
   where
     rJobs :: Job -> DistributedJobLogger -> Logger -> [RemoteJobRunnerState]
     rJobs j l cL =
-        -- (\y -> (y, l $ jobMachine y, c)) <$> (remoteJobs j)
         (\y -> RemoteJobRunnerState y (l $ jobMachine y) cL) <$> (remoteJobs j)
 
 distributeJob Nothing = return Nothing
