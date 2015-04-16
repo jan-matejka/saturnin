@@ -7,6 +7,7 @@ where
 import Prelude hiding (lookup, log, readFile)
 
 import Control.Applicative
+import Control.Concurrent
 import Control.Concurrent.STM
 import Control.Monad.Catch
 import Control.Monad.State
@@ -96,5 +97,8 @@ ybsListen (Just cg) = do
 ybsListen Nothing = return Nothing
 
 ybsAccept :: Maybe Socket -> YBServer ()
-ybsAccept (Just x) = mapM_ ((handleConnection =<<) . (liftIO . accept)) $ repeat x
+ybsAccept (Just x) =
+    forever $ do
+        c <- liftIO $ accept x
+        get >>= void . liftIO . forkIO . evalStateT (handleConnection c)
 ybsAccept Nothing = return ()
