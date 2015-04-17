@@ -8,6 +8,7 @@ module YacBuildServer.Server.Config
     , readPState
     , writePState
     , JobID (..)
+    , bumpJobID
     )
 where
 
@@ -69,6 +70,9 @@ instance ToJSON YBServerPersistentState
 
 instance Default YBServerPersistentState where
     def = YBServerPersistentState $ JobID 0
+
+bumpJobID :: YBServerPersistentState -> YBServerPersistentState
+bumpJobID x = x { lastJobID = succ $ lastJobID x }
 
 readPState :: IO (Either ParseException YBServerPersistentState)
 readPState = do

@@ -47,7 +47,7 @@ logToServerAndConn :: Text -> JobRequestListenerConnectionHandler ()
 logToServerAndConn x = logToConnection x >> (lift $ logInfo x)
 
 handleConnection :: (Socket, SockAddr) -> YBServer ()
-handleConnection x = evalStateT handle' x
+handleConnection = evalStateT handle'
   where
     handle' = logClientConnected
         >>  readJobRequest
@@ -130,11 +130,11 @@ returnMachines
     -> JobRequestListenerConnectionHandler (Maybe (Job, [JobResult]))
 returnMachines (x @ (Just (j, _))) = do
     ts <- lift get
+    let returning = fromList $ (jobMachine &&& jobHost) <$> remoteJobs j
     liftIO . atomically $ do
-        tms <- freeMachines <$> readTVar ts
-        old <- readTVar tms
-        let returning = fromList $ (jobMachine &&& jobHost) <$> remoteJobs j
-        writeTVar tms $ union old returning
+        s <- readTVar ts
+        let old = freeMachines s
+        writeTVar ts $ s { freeMachines = old `union` returning }
     return x
 returnMachines Nothing = return Nothing
 
@@ -165,22 +165,18 @@ closeConnection = do
 getJobID :: JobRequestListenerConnectionHandler JobID
 getJobID = do
     ts <- lift get
-    new <- liftIO . atomically $ pState <$> readTVar ts >>= getBumped
-    _ <- liftIO $ writePState new
-    return $ lastJobID new
-  where
-    getBumped :: TVar YBServerPersistentState -> STM (YBServerPersistentState)
-    getBumped x = do
-        old <- readTVar x
-        let new = old { lastJobID = succ $ lastJobID old }
-        _ <- writeTVar x new
-        return new
+    ps <- liftIO . atomically $ do
+        s <- readTVar ts
+        let new = s { pState = bumpJobID $ pState s }
+        writeTVar ts new
+        return $ pState new
+
+    liftIO $ writePState ps
+    return $ lastJobID ps
 
 reportFreeMachines :: JobRequestListenerConnectionHandler ()
-reportFreeMachines = do
-    ts <- lift get
-    liftIO . atomically $ freeMachines <$> readTVar ts
-        >>= readTVar
+reportFreeMachines = lift get
+    >>= (freeMachines <$>) . liftIO . atomically . readTVar
     >>= lift . logInfo . format ("free machines: "%shown)
 
 -- | Returns Nothing if all the request machines were not found
@@ -191,15 +187,17 @@ selectMachines
     -> JobRequestListenerConnectionHandler (Maybe [(MachineDescription, Hostname)])
 selectMachines r = do
     ts <- lift get
-    liftIO . atomically $ freeMachines <$> readTVar ts
-        >>= \tms -> do
-            ms <- readTVar tms
-            let found = filterMachines (testMachines r) ms
+    liftIO . atomically $ do
+        s <- readTVar ts
+        let requested = testMachines r
+            free      = freeMachines s
+            found     = filterMachines requested free
 
-            if length found /= length (testMachines r)
-            then return Nothing
-            else (writeTVar tms . difference ms $ fromList found)
-                >> (return $ Just found)
+        if length found /= length requested
+        then return Nothing
+        else writeTVar ts
+            (s { freeMachines = difference free $ fromList found})
+            >> (return $ Just found)
 
 filterMachines
     :: [MachineDescription]

@@ -8,12 +8,12 @@ module YacBuildServer.Types
     , GitSource (..)
     , YBServer
     , YBServerState (..)
+    , YBSSharedState
     , fst3
     , TestResult (..)
     , anyEither
     , isPassed
     , JobID (..)
-    , defaultYBServerState
     , JobRequestListenerConnectionHandler
     , logError
     , logInfo
@@ -46,31 +46,27 @@ type MachinesRegister = HashMap MachineDescription Hostname
 -- | JobRequest specifies job to be run. This is what client send to the
 -- job server.
 data JobRequest = TestRequest
-                { testType    :: TestType
-                , dataSource :: GitSource
-                , testMachines   :: [MachineDescription]
-                }
+    { testType    :: TestType
+    , dataSource :: GitSource
+    , testMachines   :: [MachineDescription]
+    }
     deriving (Show, Read)
 
 data TestType = CabalTest | MakeCheckTest
     deriving (Show, Read)
 
 data YBServerState = YBServerState
-    { ybssConfig :: ConfigServer
-    , pState :: TVar YBServerPersistentState
-    , freeMachines :: TVar MachinesRegister
+    { ybssConfig    :: ConfigServer
+    , pState        :: YBServerPersistentState
+    , freeMachines  :: MachinesRegister
     }
+    deriving (Show)
 
--- | Extra function to create default as it needs to run STM
-defaultYBServerState :: IO (TVar YBServerState)
-defaultYBServerState =
-    liftIO . atomically $ do
-        x <- newTVar def
-        y <- newTVar empty
-        z <- newTVar $ YBServerState def x y
-        return z
+instance Default YBServerState where
+    def = YBServerState def def empty
 
-type YBServer a = StateT (TVar YBServerState) IO a
+type YBSSharedState = TVar YBServerState
+type YBServer a = StateT YBSSharedState IO a
 
 logError :: Text -> YBServer ()
 logError = liftIO . logServer . format ("error: " % text % "\n")
@@ -79,7 +75,7 @@ logInfo :: Text -> YBServer ()
 logInfo = liftIO . logServer . format ("info: " % text % "\n")
 
 type JobRequestListenerConnectionHandler a =
-    StateT (Socket, SockAddr) (StateT (TVar YBServerState) IO) a
+    StateT (Socket, SockAddr) (StateT YBSSharedState IO) a
 
 logToConnection :: Text -> JobRequestListenerConnectionHandler ()
 logToConnection x = do
