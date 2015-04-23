@@ -31,9 +31,9 @@ import Data.HashMap.Strict
 import Data.Monoid
 import Formatting
 import Network.Socket
+import System.IO
 
 import YacBuildServer.Git
-import YacBuildServer.Logging
 import YacBuildServer.Server.Config
 
 data BuildRequest = GitBuildRequest
@@ -59,20 +59,28 @@ data YBServerState = YBServerState
     { ybssConfig    :: ConfigServer
     , pState        :: YBServerPersistentState
     , freeMachines  :: MachinesRegister
+    , logHandle     :: Handle
     }
     deriving (Show)
 
 instance Default YBServerState where
-    def = YBServerState def def empty
+    def = YBServerState def def empty stderr
 
 type YBSSharedState = TVar YBServerState
 type YBServer a = StateT YBSSharedState IO a
 
+logServer :: Text -> YBServer ()
+logServer x = do
+    liftIO . hPutStr stderr $ unpack x
+    ts <- get
+    lh <- liftIO . atomically $ logHandle <$> readTVar ts
+    liftIO . hPutStr lh $ unpack x
+
 logError :: Text -> YBServer ()
-logError = liftIO . logServer . format ("error: " % text % "\n")
+logError = logServer . format ("error: " % text % "\n")
 
 logInfo :: Text -> YBServer ()
-logInfo = liftIO . logServer . format ("info: " % text % "\n")
+logInfo = logServer . format ("info: " % text % "\n")
 
 type JobRequestListenerConnectionHandler a =
     StateT (Socket, SockAddr) (StateT YBSSharedState IO) a

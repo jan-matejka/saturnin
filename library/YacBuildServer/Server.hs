@@ -29,6 +29,7 @@ runYBServer = atomically (newTVar def) >>= evalStateT serve
     serve :: YBServer ()
     serve =
         ybsCloseStdin
+        >> openLogFile
         >> ybsReadConfig
         >>= ybsReadState
         >>= registerMachines
@@ -38,6 +39,14 @@ runYBServer = atomically (newTVar def) >>= evalStateT serve
 
 ybsCloseStdin :: YBServer ()
 ybsCloseStdin = liftIO $ hClose stdin
+
+openLogFile :: YBServer ()
+openLogFile = do
+    ts <- get
+    h <- liftIO $ openFile "/var/log/ybs.log" AppendMode
+    liftIO . atomically $ do
+        s <- readTVar ts
+        writeTVar ts $ s { logHandle = h }
 
 ybsReadConfig :: YBServer (Maybe ConfigServer)
 ybsReadConfig = do
