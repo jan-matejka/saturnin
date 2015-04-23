@@ -7,11 +7,12 @@ where
 import Prelude hiding (lookup, log, readFile)
 
 import Control.Applicative
+import Control.Arrow
 import Control.Concurrent.Spawn
 import Control.Concurrent.STM
 import Control.Monad.State
 import Data.HashMap.Strict
-import Data.Text.Lazy hiding (head, all)
+import Data.Text.Lazy hiding (head, all, length)
 import Data.Time.Clock
 import Formatting
 import Network.Socket
@@ -23,11 +24,11 @@ import YacBuildServer.Logging
 import YacBuildServer.Server.Config
 import YacBuildServer.Types
 
-getServerState :: JobRequestListenerConnectionHandler YBServerState
-getServerState = lift get
+-- getServerState :: JobRequestListenerConnectionHandler YBServerState
+-- getServerState = lift get
 
-getConfig :: JobRequestListenerConnectionHandler ConfigServer
-getConfig = ybssConfig <$> getServerState
+--getConfig :: JobRequestListenerConnectionHandler ConfigServer
+--getConfig = ybssConfig <$> getServerState
 
 readBytes :: JobRequestListenerConnectionHandler String
 readBytes = (\x -> liftIO $ fst3 <$> recvFrom x 1024) =<< (fst <$> get)
@@ -46,14 +47,16 @@ logToServerAndConn :: Text -> JobRequestListenerConnectionHandler ()
 logToServerAndConn x = logToConnection x >> (lift $ logInfo x)
 
 handleConnection :: (Socket, SockAddr) -> YBServer ()
-handleConnection x = evalStateT handle' x
+handleConnection = evalStateT handle'
   where
     handle' = logClientConnected
         >>  readJobRequest
         >>= mkJob
         >>= logJobStart
         >>= distributeJob
+        >>= returnMachines
         >>= reportJobResult
+        >> reportFreeMachines
         >> closeConnection
         >> logClientDisconnected
 
@@ -82,13 +85,20 @@ mkJob
     -> JobRequestListenerConnectionHandler (Maybe Job)
 mkJob (Just x) = do
     ms   <- selectMachines x
-    jid  <- getJobID
+    whenNothing ms $
+        logToServerAndConn "Unable to select all requested machines"
 
-    return . Just $ Job
-        { remoteJobs = uncurry (mkRemoteJob x) <$> ms
-        , request = x
-        , jobID = jid
-        }
+    mk ms
+  where
+    mk :: Maybe [(MachineDescription, Hostname)] -> JobRequestListenerConnectionHandler (Maybe Job)
+    mk (Just ms) = do
+        jid <- getJobID
+        return . Just $ Job
+            { remoteJobs = uncurry (mkRemoteJob x) <$> ms
+            , request = x
+            , jobID = jid
+            }
+    mk Nothing = return Nothing
 mkJob Nothing = return Nothing
 
 logJobStart
@@ -111,10 +121,22 @@ distributeJob (Just x) = do
   where
     rJobs :: Job -> DistributedJobLogger -> Logger -> [RemoteJobRunnerState]
     rJobs j l cL =
-        -- (\y -> (y, l $ jobMachine y, c)) <$> (remoteJobs j)
         (\y -> RemoteJobRunnerState y (l $ jobMachine y) cL) <$> (remoteJobs j)
 
 distributeJob Nothing = return Nothing
+
+returnMachines
+    :: Maybe (Job, [JobResult])
+    -> JobRequestListenerConnectionHandler (Maybe (Job, [JobResult]))
+returnMachines (x @ (Just (j, _))) = do
+    ts <- lift get
+    let returning = fromList $ (jobMachine &&& jobHost) <$> remoteJobs j
+    liftIO . atomically $ do
+        s <- readTVar ts
+        let old = freeMachines s
+        writeTVar ts $ s { freeMachines = old `union` returning }
+    return x
+returnMachines Nothing = return Nothing
 
 reportJobResult
     :: Maybe (Job, [JobResult])
@@ -142,25 +164,40 @@ closeConnection = do
 
 getJobID :: JobRequestListenerConnectionHandler JobID
 getJobID = do
-    new <- pState <$> getServerState
-        >>= liftIO . atomically . getBumped
-    _ <- liftIO $ writePState new
-    return $ lastJobID new
-  where
-    getBumped :: TVar YBServerPersistentState -> STM (YBServerPersistentState)
-    getBumped x = do
-        old <- readTVar x
-        let new = old { lastJobID = succ $ lastJobID old }
-        _ <- writeTVar x new
-        return new
+    ts <- lift get
+    ps <- liftIO . atomically $ do
+        s <- readTVar ts
+        let new = s { pState = bumpJobID $ pState s }
+        writeTVar ts new
+        return $ pState new
 
--- | FIXME: Unhandled failure:
--- when not all requested machines are available
+    liftIO $ writePState ps
+    return $ lastJobID ps
+
+reportFreeMachines :: JobRequestListenerConnectionHandler ()
+reportFreeMachines = lift get
+    >>= (freeMachines <$>) . liftIO . atomically . readTVar
+    >>= lift . logInfo . format ("free machines: "%shown)
+
+-- | Returns Nothing if all the request machines were not found
+-- otherwise removes the taken machines the freeMachines in
+-- YBServerState and returns Just the taken machines
 selectMachines
     :: JobRequest
-    -> JobRequestListenerConnectionHandler [(MachineDescription, Hostname)]
-selectMachines r =
-    (filterMachines (testMachines r) . machines) <$> getConfig
+    -> JobRequestListenerConnectionHandler (Maybe [(MachineDescription, Hostname)])
+selectMachines r = do
+    ts <- lift get
+    liftIO . atomically $ do
+        s <- readTVar ts
+        let requested = testMachines r
+            free      = freeMachines s
+            found     = filterMachines requested free
+
+        if length found /= length requested
+        then return Nothing
+        else writeTVar ts
+            (s { freeMachines = difference free $ fromList found})
+            >> (return $ Just found)
 
 filterMachines
     :: [MachineDescription]

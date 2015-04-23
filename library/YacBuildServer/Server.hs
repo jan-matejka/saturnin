@@ -7,9 +7,11 @@ where
 import Prelude hiding (lookup, log, readFile)
 
 import Control.Applicative
+import Control.Concurrent
 import Control.Concurrent.STM
 import Control.Monad.Catch
 import Control.Monad.State
+import Data.Default
 import Data.Either.Combinators
 import Data.Maybe
 import Formatting (format, shown, text, (%))
@@ -22,13 +24,15 @@ import YacBuildServer.Server.Connection
 import YacBuildServer.Types
 
 runYBServer :: IO ()
-runYBServer = defaultYBServerState >>= evalStateT serve
+runYBServer = atomically (newTVar def) >>= evalStateT serve
   where
     serve :: YBServer ()
     serve =
         ybsCloseStdin
+        >> openLogFile
         >> ybsReadConfig
         >>= ybsReadState
+        >>= registerMachines
         >>= ybsCreateWorkdir
         >>= ybsListen
         >>= ybsAccept
@@ -36,11 +40,22 @@ runYBServer = defaultYBServerState >>= evalStateT serve
 ybsCloseStdin :: YBServer ()
 ybsCloseStdin = liftIO $ hClose stdin
 
+openLogFile :: YBServer ()
+openLogFile = do
+    ts <- get
+    h <- liftIO $ openFile "/var/log/ybs.log" AppendMode
+    liftIO . atomically $ do
+        s <- readTVar ts
+        writeTVar ts $ s { logHandle = h }
+
 ybsReadConfig :: YBServer (Maybe ConfigServer)
 ybsReadConfig = do
     x <- liftIO readConfig
     whenLeft  x $ logError . format shown
-    whenRight x $ \z -> get >>= \y -> put y { ybssConfig = z }
+    whenRight x $ \z -> get >>= \ts ->
+        liftIO . atomically $ do
+            s <- readTVar ts
+            writeTVar ts $ s { ybssConfig = z }
     return $ rightToMaybe x
 
 ybsReadState
@@ -48,12 +63,24 @@ ybsReadState
     -> YBServer (Maybe ConfigServer)
 ybsReadState Nothing = return Nothing
 ybsReadState (Just cg) = do
-    y <- liftIO readPState
-    whenLeft  y $ logError . format shown
-    whenRight y $ \z -> do
-        s <- liftIO . atomically $ newTVar z
-        get >>= \t -> put t { pState = s }
-    return $ const cg <$> rightToMaybe y
+    eps <- liftIO readPState
+    whenLeft  eps $ logError . format shown
+    ts <- get
+    whenRight eps $ \ps -> liftIO . atomically $ do
+        s <- readTVar ts
+        writeTVar ts $ s { pState = ps }
+    return $ const cg <$> rightToMaybe eps
+
+registerMachines
+    :: Maybe ConfigServer
+    -> YBServer (Maybe ConfigServer)
+registerMachines (Just cg) = do
+    ts <- get
+    liftIO . atomically $ do
+        s <- readTVar ts
+        writeTVar ts $ s { freeMachines = machines cg }
+    return (Just cg)
+registerMachines Nothing = return Nothing
 
 ybsCreateWorkdir :: Maybe ConfigServer -> YBServer (Maybe ConfigServer)
 ybsCreateWorkdir (Just cg) = do
@@ -86,5 +113,9 @@ ybsListen (Just cg) = do
 ybsListen Nothing = return Nothing
 
 ybsAccept :: Maybe Socket -> YBServer ()
-ybsAccept (Just x) = mapM_ ((handleConnection =<<) . (liftIO . accept)) $ repeat x
+ybsAccept (Just x) = do
+    ts <- get
+    forever $ do
+        c <- liftIO $ accept x
+        void . liftIO . forkIO $ evalStateT (handleConnection c) ts
 ybsAccept Nothing = return ()

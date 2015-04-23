@@ -8,12 +8,12 @@ module YacBuildServer.Types
     , GitSource (..)
     , YBServer
     , YBServerState (..)
+    , YBSSharedState
     , fst3
     , TestResult (..)
     , anyEither
     , isPassed
     , JobID (..)
-    , defaultYBServerState
     , JobRequestListenerConnectionHandler
     , logError
     , logInfo
@@ -22,17 +22,18 @@ module YacBuildServer.Types
     )
 where
 
-import Control.Applicative
+import Control.Applicative  hiding (empty)
 import Control.Concurrent.STM
 import Control.Monad.State
-import Data.Text.Lazy
+import Data.Text.Lazy hiding (empty)
 import Data.Default
+import Data.HashMap.Strict
 import Data.Monoid
 import Formatting
 import Network.Socket
+import System.IO
 
 import YacBuildServer.Git
-import YacBuildServer.Logging
 import YacBuildServer.Server.Config
 
 data BuildRequest = GitBuildRequest
@@ -40,39 +41,49 @@ data BuildRequest = GitBuildRequest
     , brHead  :: String
     }
 
+type MachinesRegister = HashMap MachineDescription Hostname
+
 -- | JobRequest specifies job to be run. This is what client send to the
 -- job server.
 data JobRequest = TestRequest
-                { testType    :: TestType
-                , dataSource :: GitSource
-                , testMachines   :: [MachineDescription]
-                }
+    { testType    :: TestType
+    , dataSource :: GitSource
+    , testMachines   :: [MachineDescription]
+    }
     deriving (Show, Read)
 
 data TestType = CabalTest | MakeCheckTest
     deriving (Show, Read)
 
 data YBServerState = YBServerState
-    { ybssConfig :: ConfigServer
-    , pState :: TVar YBServerPersistentState
+    { ybssConfig    :: ConfigServer
+    , pState        :: YBServerPersistentState
+    , freeMachines  :: MachinesRegister
+    , logHandle     :: Handle
     }
+    deriving (Show)
 
--- | Extra function to create default as it needs to run STM
-defaultYBServerState :: IO YBServerState
-defaultYBServerState = do
-    s <- liftIO . atomically $ newTVar def
-    return $ YBServerState def s
+instance Default YBServerState where
+    def = YBServerState def def empty stderr
 
-type YBServer a = StateT YBServerState IO a
+type YBSSharedState = TVar YBServerState
+type YBServer a = StateT YBSSharedState IO a
+
+logServer :: Text -> YBServer ()
+logServer x = do
+    liftIO . hPutStr stderr $ unpack x
+    ts <- get
+    lh <- liftIO . atomically $ logHandle <$> readTVar ts
+    liftIO . hPutStr lh $ unpack x
 
 logError :: Text -> YBServer ()
-logError = liftIO . logServer . format ("error: " % text % "\n")
+logError = logServer . format ("error: " % text % "\n")
 
 logInfo :: Text -> YBServer ()
-logInfo = liftIO . logServer . format ("info: " % text % "\n")
+logInfo = logServer . format ("info: " % text % "\n")
 
 type JobRequestListenerConnectionHandler a =
-    StateT (Socket, SockAddr) (StateT YBServerState IO) a
+    StateT (Socket, SockAddr) (StateT YBSSharedState IO) a
 
 logToConnection :: Text -> JobRequestListenerConnectionHandler ()
 logToConnection x = do
