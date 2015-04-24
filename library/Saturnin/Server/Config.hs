@@ -1,5 +1,5 @@
 {-# LANGUAGE DeriveGeneric #-}
-module YacBuildServer.Server.Config
+module Saturnin.Server.Config
     ( ConfigServer (..)
     , readConfig
     , MachineDescription

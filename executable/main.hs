@@ -1,5 +1,5 @@
 module Main (main) where
 
-import YacBuildServer.Server
+import Saturnin.Server
 main :: IO ()
 main = runYBServer

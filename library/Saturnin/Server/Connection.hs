@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module YacBuildServer.Server.Connection
+module Saturnin.Server.Connection
     ( handleConnection
     )
 where
@@ -19,10 +19,10 @@ import Network.Socket
 import System.IO hiding (readFile)
 import Text.Read hiding (get, lift)
 
-import YacBuildServer.Jobs
-import YacBuildServer.Logging
-import YacBuildServer.Server.Config
-import YacBuildServer.Types
+import Saturnin.Jobs
+import Saturnin.Logging
+import Saturnin.Server.Config
+import Saturnin.Types
 
 -- getServerState :: JobRequestListenerConnectionHandler YBServerState
 -- getServerState = lift get

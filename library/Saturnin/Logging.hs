@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module YacBuildServer.Logging
+module Saturnin.Logging
     ( getJobLogger
     , Logger
     , DistributedJobLogger
@@ -11,7 +11,7 @@ import Data.Text.Lazy
 import System.Directory
 import System.FilePath.Posix
 
-import YacBuildServer.Server.Config
+import Saturnin.Server.Config
 
 jobLogs :: FilePath
 jobLogs = "/var/lib/ybs/job-logs"

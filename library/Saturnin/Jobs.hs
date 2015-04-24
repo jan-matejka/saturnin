@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module YacBuildServer.Jobs
+module Saturnin.Jobs
     ( JobRequest (..)
     , CmdResult (..)
     , JobResult (..)
@@ -22,9 +22,9 @@ import System.Exit
 import System.IO
 import System.Process
 
-import YacBuildServer.Git
-import YacBuildServer.Logging
-import YacBuildServer.Types
+import Saturnin.Git
+import Saturnin.Logging
+import Saturnin.Types
 
 -- | Job fully describes a job to be run. This is what JobRequest is
 -- translated into for internal representation. This holds data that are

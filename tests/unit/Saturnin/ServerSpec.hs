@@ -1,4 +1,4 @@
-module YacBuildServer.ServerSpec (spec) where
+module Saturnin.ServerSpec (spec) where
 
 import Test.Hspec
 

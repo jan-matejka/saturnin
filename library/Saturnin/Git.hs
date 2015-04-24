@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module YacBuildServer.Git
+module Saturnin.Git
     ( readFile
     , runCmd
     , GitSource (..)

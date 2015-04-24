@@ -1,11 +1,11 @@
 author:         Jan Matějka
 build-type:     Simple
 cabal-version:  >= 1.16
-copyright:      2014 Jan Matějka <yac@blesmrt.net>
+copyright:      2015 Jan Matějka <yac@blesmrt.net>
 license:        BSD3
 maintainer:     <yac@blesmrt.net>
-name:           YacBuildServer
-synopsis:       Yac build server
+name:           Saturnin
+synopsis:       Saturnin  CI / Job System
 version:        0.1.0
 
 library
@@ -32,13 +32,13 @@ library
         , exceptions
     default-language:   Haskell2010
     exposed-modules:
-          YacBuildServer.Git
-        , YacBuildServer.Jobs
-        , YacBuildServer.Server
-        , YacBuildServer.Server.Config
-        , YacBuildServer.Server.Connection
-        , YacBuildServer.Logging
-        , YacBuildServer.Types
+          Saturnin.Git
+        , Saturnin.Jobs
+        , Saturnin.Server
+        , Saturnin.Server.Config
+        , Saturnin.Server.Connection
+        , Saturnin.Logging
+        , Saturnin.Types
     ghc-options:
         -Wall
     ghc-prof-options:
@@ -46,7 +46,7 @@ library
         -prof
     hs-source-dirs:     library
 
-executable yac-build-server
+executable saturnin
     main-is: main.hs
     hs-source-dirs:
         executable
@@ -55,12 +55,12 @@ executable yac-build-server
         -Wall
     build-depends:
         base < 5
-        , YacBuildServer
+        , Saturnin
 
 test-suite tests
     build-depends:
         base < 5
-        , YacBuildServer
+        , Saturnin
         , mtl
         , either
         , data-default
@@ -74,7 +74,7 @@ test-suite tests
     main-is:
         Spec.hs
     other-modules:
-        YacBuildServer.ServerSpec
+        Saturnin.ServerSpec
     type:
         exitcode-stdio-1.0
 

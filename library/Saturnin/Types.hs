@@ -1,5 +1,5 @@
 {-# LANGUAGE RankNTypes, OverloadedStrings #-}
-module YacBuildServer.Types
+module Saturnin.Types
     ( MachineDescription
     , Hostname
     , BuildRequest (..)
@@ -33,8 +33,8 @@ import Formatting
 import Network.Socket
 import System.IO
 
-import YacBuildServer.Git
-import YacBuildServer.Server.Config
+import Saturnin.Git
+import Saturnin.Server.Config
 
 data BuildRequest = GitBuildRequest
     { brUri   :: String

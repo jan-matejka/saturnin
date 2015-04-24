@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module YacBuildServer.Server
+module Saturnin.Server
     ( runYBServer
     )
 where
@@ -19,9 +19,9 @@ import Network.Socket
 import System.Directory
 import System.IO hiding (readFile)
 
-import YacBuildServer.Server.Config
-import YacBuildServer.Server.Connection
-import YacBuildServer.Types
+import Saturnin.Server.Config
+import Saturnin.Server.Connection
+import Saturnin.Types
 
 runYBServer :: IO ()
 runYBServer = atomically (newTVar def) >>= evalStateT serve
