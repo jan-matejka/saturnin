@@ -7,6 +7,14 @@ maintainer:     <yac@blesmrt.net>
 name:           Saturnin
 synopsis:       Saturnin  CI / Job System
 version:        0.1.0
+category:       Application Server
+description:    Saturnin  CI / Job System
+license-file:   LICENSE
+
+
+source-repository head
+  type:     git
+  location: https://github.com/yaccz/saturnin.git
 
 library
     build-depends:
