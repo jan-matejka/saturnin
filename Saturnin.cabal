@@ -10,6 +10,7 @@ version:        0.1.0
 category:       Application Server
 description:    Saturnin  CI / Job System
 license-file:   LICENSE
+extra-source-files: HLint.hs
 
 
 source-repository head
